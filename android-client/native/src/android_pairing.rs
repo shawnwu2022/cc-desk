@@ -9,10 +9,7 @@ use crate::{
 };
 use cc_desk_remote_record::appbind::CanonicalOrigin;
 use cc_desk_remote_security::{ClientGrantState, GrantError, P256Spki, Role};
-use jni::{
-    JNIEnv, JavaVM,
-    objects::GlobalRef,
-};
+use jni::{JNIEnv, JavaVM, objects::GlobalRef};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::{
     net::{SocketAddr, ToSocketAddrs},

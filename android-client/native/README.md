@@ -1,40 +1,30 @@
-# Android native Observer transport
+# Android native Observer owner
 
-This is the native transport owner and signed approval verifier, not an
-enrollment exchange, a durable store, or an APK runtime. A backend submits its
-current attempt's exact Phone proof and desktop approval to `verify_approval`.
-Use the independent Host commitment from the desktop's QR or full manual
-pairing string, not a pin returned by the Relay. Use only the current local
-Keystore-owned public roles. Commit the verified record transactionally and
-consume its typed receipt at `start_verified_observer`. The Android app must
-stay unavailable until the enrollment exchange, replay-safe durable store,
-Keystore signer implementations and the Java backend are wired and verified.
+The Android application supplies its three verified hardware identities for one
+explicit pairing action. The native worker makes one authenticated Relay claim,
+reconciles ambiguous delivery by polling only that request ID, and verifies the
+desktop’s signature against the commitment carried by its QR or full pairing
+string. Relay admission is not desktop authorization. A paired result is
+published only after the platform commits the bounded signed receipt to its
+hardware-sealed no-backup store.
 
-The authenticated input includes an independently pinned desktop TLS key,
-owner-approved exact Observer session scope, canonical Relay and client/host key
-epochs, a bounded tunnel, and distinct Endpoint, Relay and verified local
-presence signing authorities. The transport uses the existing pinned TLS,
-authenticated app binding, grant, and peer installation. It provides no new key
-export, fallback signer, interop acceptance flag, input/control command, or
-automatic reconnect. A later deliberate start needs a newly authorized profile;
-keeping a durable pairing alone does not authorize a session.
+A persisted receipt can reauthenticate the desktop identity against the current
+three Keystore roles. It cannot reauthorize the original session. Pairing may
+contain no shared session; it must not construct a connection in that case.
+A separate explicit viewing action can consume an exact still-current scope.
+No wildcard, fallback signer, automatic reconnect, keyboard, control, ACK, or
+generic command surface is exposed.
 
-`NativeDesktopBackend` JNI uses a process-local handle delivered by the trusted
-Rust backend after starting that exact owner:
+The Java backend uses the private `NativeDesktopBackend` JNI contract for
+starting and polling a pairing, independently rechecking stored identity,
+explicitly starting the paired scope, and taking one bounded plain-text
+authenticated Observer snapshot. It clears the view on retirement. Native
+cancellation requests shutdown and hides pending data; it does not assert the
+original TLS/WSS/provider work already joined.
 
-- `nativeObserverState(long): int` returns 0 closed or unknown, 1 connecting,
-  2 authenticated receipt available or consumed, 3 failed or retired.
-- `nativeTakeObserverSnapshot(long): byte[][]` takes the one bounded, authenticated
-  Observer snapshot once. `null` means no snapshot; nothing is acknowledged.
-  The Java renderer must validate/render the exact protocol and clear on retirement.
-- `nativeCancelObserver(long): void` hides any pending snapshot and requests
-  owner retirement. Return does **not** mean the native transport already joined.
-  No next owner is allowed until the previous task and both original native
-  transport owners have verifiably retired.
-
-For local development, check the Android target with a pinned Rust 1.100.0 and
-the Android NDK toolchain for the app's minimum API:
+Use a pinned Rust 1.100.0 plus the Android NDK toolchain:
 `cargo +1.100.0 check --target aarch64-linux-android --locked --offline`.
-A production native build must further link, satisfy 16 KiB ELF segment
-alignment, package as the exact signed APK, and install/run on supported Android.
-There is no Android/desktop enrollment or full runtime verification in this crate.
+A release additionally requires a modern Android NDK link, verified 16 KiB ELF
+and APK native segment/entry alignment, signing, and combined real-device
+validation. Do not infer hardware, installation, or deployment readiness from
+a compile-only check.

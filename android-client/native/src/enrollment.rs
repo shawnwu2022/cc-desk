@@ -423,8 +423,8 @@ impl DurablyAcceptedEnrollment {
     }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DurableRecord<'a> {
     version: u8,
     accepted_unix_ms: u64,
@@ -478,4 +478,51 @@ impl VerifiedEnrollment {
             .map_err(|_| InvalidEnrollment)?;
         Ok(DurablyAcceptedEnrollment(self))
     }
+}
+
+/// Reauthenticates device membership from platform-authenticated opaque
+/// storage. An expired original scope remains expired; this API returns only
+/// the pinned desktop identity, and cannot mint a live Viewer or grant.
+pub fn restore_stored_desktop(
+    bytes: &[u8],
+    current_origin: CanonicalOrigin,
+    current_endpoint: [u8; 91],
+    current_relay: [u8; 91],
+    current_approval: [u8; 91],
+    now_unix_ms: u64,
+) -> Result<[u8; 32], InvalidEnrollment> {
+    if bytes.is_empty() || bytes.len() > 2 * MAX_ENVELOPE_BYTES + 1024 {
+        return Err(InvalidEnrollment);
+    }
+    let record: DurableRecord<'_> = serde_json::from_slice(bytes).map_err(|_| InvalidEnrollment)?;
+    if record.version != 1
+        || record.accepted_unix_ms == 0
+        || record.accepted_unix_ms > now_unix_ms
+        || record.relay_origin != current_origin.as_str()
+    {
+        return Err(InvalidEnrollment);
+    }
+    P256Spki::new(&current_relay).map_err(|_| InvalidEnrollment)?;
+    let id = lower_hex::<32>(&record.desktop_endpoint_id)?;
+    let attempt = EnrollmentAttempt {
+        host: HostCommitment::QrEndpointId(id),
+        origin: current_origin,
+        code_sha256: lower_hex(&record.code_sha256)?,
+        invite_id: lower_hex(&record.invite_id)?,
+        request_id: lower_hex(&record.request_id)?,
+        relay_tunnel: lower_hex(&record.tunnel)?,
+        phone_id: lower_hex(&record.phone_id)?,
+        phone_relay_key: current_relay[26..]
+            .try_into()
+            .map_err(|_| InvalidEnrollment)?,
+        phone_endpoint_spki: current_endpoint,
+        phone_grant_spki: current_approval,
+    };
+    let approved = verify_approval(
+        attempt,
+        record.phone_attestation,
+        record.desktop_approval,
+        record.accepted_unix_ms,
+    )?;
+    Ok(approved.host_endpoint().endpoint_id(Role::Host))
 }
