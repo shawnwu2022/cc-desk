@@ -44,5 +44,15 @@ rewrite those URLs. A path prefix is not a browser isolation boundary:
 WebAuthn and browser storage remain origin-scoped. Use a dedicated origin for
 independent enrollment/paired-session testing.
 
+Only the ordinary 0.28 stable/RC release workflow stages the downloadable
+mobile site. After the independent signed Windows installer check, the
+same source builds an isolated browser-product site and runs this preflight.
+The exact Windows candidate artifact carries the ZIP and a separate manifest
+binding the archive and contained files to the source SHA, workflow run and
+attempt. Promotion rechecks both after downloading the same-run artifact.
+Neither file is an updater asset or a signed platform package. The manifest
+states `deployReady: false`; availability, deployment authorization and real
+devices are still not verified.
+
 Check Vite-generated preview-path references without a browser or server:
 `node --test tests/scripts/browserProductPaths.node.mjs`.

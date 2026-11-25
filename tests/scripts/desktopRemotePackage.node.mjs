@@ -43,7 +43,7 @@ test('Standard build freezes tools in a child environment and rejects conflicts'
 });
 test('Windows release builds the signed desktop candidate without browser tools',()=>{
  const workflow=fs.readFileSync('.github/workflows/release.yml','utf8');
- assert.doesNotMatch(workflow,/setup-windows-browser-tools/);
+ assert.match(workflow,/Install and check signed Windows candidate before upload[\s\S]+needs\.admission\.outputs\.mobile_release == 'true'\s+uses: \.\/\.github\/actions\/setup-windows-browser-tools/);
  const action=fs.readFileSync('.github/actions/setup-windows-browser-tools/action.yml','utf8');
  assert.match(action,/cargo fetch --locked --manifest-path remote\/Cargo.toml/);
  assert.match(action,/rustup target add wasm32-unknown-unknown --toolchain 1.98.1/);

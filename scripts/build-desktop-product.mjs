@@ -16,14 +16,20 @@ export function desktopEnvironment(input,version=inspect){
  for(const tool of [env.CC_wasm32_unknown_unknown,env.AR_wasm32_unknown_unknown])if(!/version 21\.1\.8\b/.test(version(tool,['--version'],env)))throw Error('LLVM 21.1.8 required');
  return env;
 }
-export function buildDesktopProduct(){
+export function buildDesktopProduct({releaseSite=false}={}){
  // 标准 Windows 包包含能力，但不创建登记、授权或网络会话。
  if(process.platform!=='win32')throw Error('Desktop remote host packaging is Windows-only');
  const browserTarget=path.join(root,'.audit','desktop-product-browser');
  const env=desktopEnvironment(process.env);env.CARGO_TARGET_DIR=browserTarget;
  for(const script of ['prepare-session-sdk.mjs','prepare-opencode-archive-sdk.mjs','build-browser-runtime.mjs','build-browser-registration-runtime.mjs'])run(process.execPath,['scripts/'+script],env);
  for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name),undefined,browserTarget);
- run(process.execPath,['node_modules/vite/bin/vite.js','build','--mode','browser-product'],env);
- for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name),path.join(root,'dist',name),browserTarget);
+ const site=releaseSite?path.join(root,'.audit','browser-release-site'):path.join(root,'dist');
+ if(releaseSite&&fs.existsSync(site))throw Error('Browser release stage must be new');
+ run(process.execPath,['node_modules/vite/bin/vite.js','build','--mode','browser-product',...(releaseSite?['--outDir',site]:[])],env);
+ for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name),path.join(site,name),browserTarget);
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))buildDesktopProduct();
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+ const args=process.argv.slice(2);
+ if(args.length>1||(args.length===1&&args[0]!=='--release-site'))throw Error('Unknown browser build argument');
+ buildDesktopProduct({releaseSite:args.length===1});
+}
