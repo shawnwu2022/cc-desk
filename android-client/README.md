@@ -1,6 +1,6 @@
 # Native Android client: platform identity boundary
 
-This branch contains a native Android Activity and camera QR reader, per-host metadata and a typed future-client boundary. The disconnected development build has no enrollment transport or live Observer service.
+This branch contains a native Android Activity and camera QR reader, per-host metadata and a typed future-client boundary. The SDK-only unsigned build is disconnected; the integrated native driver requires the exact Rust ABI and approved product packaging.
 
 ## Contracts
 
@@ -71,9 +71,7 @@ Run the unsigned integration build with existing tools:
 
 No installer, credential, test-device change or network dependency is required.
 Outputs are ignored and not for distribution. The launcher Activity is the
-native app entry, not a redirect; no other app is launched from it. Until an
-actual Rust owner is wired, pairing is disabled and no session can be claimed
-as connected. The in-app camera uses the pinned Apache-2.0 ZXing Core 3.5.3 from Maven Central. Obtain the verified upstream jar before offline builds. It does not use Play Services or upload images. Camera permissions are requested only in the scanner. Manual code remains available once the same real backend is connected. Neither path is active in this disconnected build.
+native app entry, not a redirect; no other app is launched from it. The standalone SDK-only build excludes the Rust library, so pairing and live observation remain disabled there. The in-app camera uses the pinned Apache-2.0 ZXing Core 3.5.3 from Maven Central. Obtain the verified upstream jar before offline builds. It does not use Play Services or upload images. Camera permissions are requested only in the scanner. Manual code remains available once the same real backend is connected. Neither path is active in this disconnected build.
 
 App-private, non-backup storage contains only bounded metadata for approved
 desktops: local enrollment UUID, verified host identifier, display label and
@@ -110,6 +108,4 @@ is AES-256-GCM in AndroidKeyStore; records have fresh IVs, enrollment-bound AAD
 and version, live in the app no-backup directory, and commit only after a synced
 atomic write and ciphertext readback. No UI metadata grants native authority.
 Readback returns decrypted opaque bytes solely for native re-verification, never
-marks a profile active. Existing observer JNI symbols are declared in Java, but
-loading a library alone does not enable pairing. Native enrollment begin/status/
-cancel and persistence re-verification must exist before activation.
+marks a profile active. Java requires the exact Rust pairing and observer ABI version, not library load alone. Pair approval requires native verification and durable receipt before publishing UI metadata. Existing metadata is not visible until a native rescan re-verifies the matching receipt and hardware public keys; prior active observation is never reopened automatically.
