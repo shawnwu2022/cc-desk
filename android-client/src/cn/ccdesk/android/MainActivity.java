@@ -21,6 +21,9 @@ public final class MainActivity extends Activity {
     private DesktopStore store;
     private NativeDesktopBackend backend;
     private boolean pairingPending;
+    private TerminalControlPanel controlPanel;
+    private DesktopBackend.Desktop controlDesktop;
+    private long controlHandle;
     private UUID selected;
     private UUID scanOwner;
     private PairingInvite pendingConfirmation;
@@ -41,7 +44,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = new DesktopStore(this);
-        backend = NativeDesktopBackend.load(this, this::render);
+        backend = NativeDesktopBackend.load(this, this::updateConnectionViews);
         String last = getPreferences(MODE_PRIVATE).getString("selected", null);
         if (last != null) {
             try { selected = UUID.fromString(last); }
@@ -57,6 +60,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onDestroy() {
         active = false;
+        if (controlPanel != null) controlPanel.closeLocally();
         ScanMailbox.clear(scanOwner);
         if (pendingConfirmation != null) pendingConfirmation.close();
         enrollmentEpoch++;
@@ -74,7 +78,7 @@ public final class MainActivity extends Activity {
         scroll.addView(content);
         setContentView(scroll);
         text("CC Desk", 26);
-        text("远程会话 · 仅观察", 16);
+        text("远程连接 · 共享会话", 16);
         if (backend == null) text("原生连接组件尚未接入。当前不能配对或读取远程会话。", 16);
 
         try {
@@ -137,8 +141,13 @@ public final class MainActivity extends Activity {
             button("关闭会话列表", () -> backend.disconnectObserver(desktop));
             if (offers.isEmpty()) text("电脑没有共享会话，请在电脑上开启共享。", 15);
             for (DesktopBackend.Offer offer : offers) {
-                button(offer.label + " · " + source, () -> backend.chooseShare(desktop, offer));
+                String purpose = offer.role == DesktopBackend.Role.CONTROLLER ? "请求控制" : "查看";
+                button(purpose + " · " + offer.label + " · " + source, () -> backend.chooseShare(desktop, offer));
             }
+        }
+        if (state == DesktopBackend.State.CONTROLLING) {
+            button("打开控制台 · " + source, () -> openControl(desktop, source));
+            button("停止控制", () -> backend.disconnectObserver(desktop));
         }
         if (state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.AWAITING_OBSERVER ||
             state == DesktopBackend.State.LOADING_SHARES) {
@@ -153,6 +162,64 @@ public final class MainActivity extends Activity {
             TextView snapshot = text(session.text, 14);
             snapshot.setTypeface(android.graphics.Typeface.MONOSPACE);
         }
+    }
+
+    private void openControl(DesktopBackend.Desktop desktop, String source) {
+        long exact = backend.controlHandle(desktop);
+        if (exact == 0) return;
+        controlDesktop = desktop;
+        controlHandle = exact;
+        controlPanel = new TerminalControlPanel(this, source,
+            java.util.EnumSet.allOf(TerminalControlPanel.Key.class), new TerminalControlPanel.Actions() {
+                @Override public void send(String text, TerminalControlPanel.Completion done) {
+                    backend.sendControl(desktop, exact, text, null, done);
+                }
+                @Override public void key(TerminalControlPanel.Key key, TerminalControlPanel.Completion done) {
+                    backend.sendControl(desktop, exact, null, key, done);
+                }
+                @Override public void leave() { leaveControl(true); }
+            });
+        setContentView(controlPanel);
+        updateConnectionViews();
+    }
+
+    private void updateConnectionViews() {
+        if (controlPanel == null) { render(); return; }
+        DesktopBackend.Desktop desktop = controlDesktop;
+        long original = controlHandle;
+        if (backend.controlHandle(desktop) != original) {
+            leaveControl(false);
+            text("控制已结束，输入未自动重发。", 16);
+            return;
+        }
+        List<DesktopBackend.Session> updates = backend.observerSessions(desktop);
+        DesktopBackend.Session frame = updates.isEmpty() ? null : updates.get(0);
+        boolean ready = backend.controllerReady(desktop, original);
+        controlPanel.update(frame == null ? "" : frame.text, ready, ready ? "可以输入" : "等待电脑画面");
+        if (frame != null && frame.frameId > 0)
+            backend.confirmDisplayedFrame(desktop, original, frame.frameId);
+    }
+
+    private void leaveControl(boolean disconnect) {
+        if (controlPanel == null) return;
+        DesktopBackend.Desktop original = controlDesktop;
+        long exact = controlHandle;
+        controlPanel.closeLocally();
+        controlPanel = null;
+        controlDesktop = null;
+        controlHandle = 0;
+        if (disconnect) backend.disconnectController(original, exact);
+        render();
+    }
+
+    @Override protected void onStop() {
+        if (controlPanel != null) leaveControl(true);
+        super.onStop();
+    }
+
+    @Override public void onBackPressed() {
+        if (controlPanel != null) leaveControl(true);
+        else super.onBackPressed();
     }
 
     private void manualPairing() {
@@ -290,6 +357,7 @@ public final class MainActivity extends Activity {
             case SHARES_READY: return "共享会话";
             case AWAITING_OBSERVER: return "正在连接会话，请按手机提示确认";
             case OBSERVING: return "会话快照";
+            case CONTROLLING: return "已获控制批准";
             case DISCONNECTED: return "未连接";
             case REVOKED: return "已撤销";
             default: return "暂不可用，请检查电脑连接";

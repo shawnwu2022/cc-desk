@@ -32,7 +32,7 @@ final class NativeDesktopBackend implements DesktopBackend {
         try {
             System.loadLibrary("cc_desk_android_native");
             // Calls a real symbol when loading so unsuitable/mismatched libraries cannot activate.
-            if (nativeAndroidAbiVersion() != 2 || nativePairingState(0) != 0) return null;
+            if (nativeAndroidAbiVersion() != 3 || nativePairingState(0) != 0) return null;
             return new NativeDesktopBackend(activity, onChanged);
         } catch (SecurityException | LinkageError ignored) {
             return null;
@@ -173,6 +173,7 @@ final class NativeDesktopBackend implements DesktopBackend {
                     stopObserver(c, State.UNAVAILABLE);
                     return;
                 }
+                c.selectedOffer = offer;
                 c.offers = Collections.emptyList();
                 c.state = State.AWAITING_OBSERVER;
                 changed();
@@ -225,12 +226,15 @@ final class NativeDesktopBackend implements DesktopBackend {
             org.json.JSONObject item = items.getJSONObject(i);
             String id = item.getString("id");
             String label = item.getString("label");
-            if (item.length() != 2 || !id.matches("[0-9a-f]{32}") || !ids.add(id) ||
+            String rawRole = item.getString("role");
+            Role role = "observer".equals(rawRole) ? Role.OBSERVER :
+                ("controller".equals(rawRole) ? Role.CONTROLLER : null);
+            if (role == null || item.length() != 3 || !id.matches("[0-9a-f]{32}") || !ids.add(id) ||
                 label.trim().isEmpty() || label.length() > 48 ||
                 label.codePoints().anyMatch(ch -> Character.isISOControl(ch) ||
                     Character.getType(ch) == Character.FORMAT))
                 throw new org.json.JSONException("Invalid share row");
-            offers.add(new Offer(owner, id, label));
+            offers.add(new Offer(owner, id, label, role));
         }
         return Collections.unmodifiableList(offers);
     }
@@ -241,19 +245,153 @@ final class NativeDesktopBackend implements DesktopBackend {
             int state = nativeObserverState(observer);
             if (state == 1) { schedule(() -> pollObserver(c, observer)); return; }
             if (state != 2) { stopObserver(c); return; }
-            String text = nativeTakeObserverText(observer);
-            if (text != null) c.snapshot = new Session("current-observer", "已批准的会话", text);
-            if (c.state != State.OBSERVING || text != null) {
-                c.state = State.OBSERVING;
+            Role expected = c.selectedOffer == null ? null : c.selectedOffer.role;
+            int role = nativeViewerRole(observer);
+            if (expected == null || (expected == Role.OBSERVER ? role != 1 : role != 2)) {
+                stopObserver(c, State.UNAVAILABLE);
+                return;
+            }
+            boolean controller = expected == Role.CONTROLLER;
+            String text = controller ? nativeTakeControllerFrame(observer) : nativeTakeObserverText(observer);
+            if (text != null) {
+                if (controller) {
+                    if (text.length() > 240000) throw new IllegalArgumentException("Projection too large");
+                    org.json.JSONObject frame = new org.json.JSONObject(text);
+                    long frameId = frame.getLong("id");
+                    String literal = frame.getString("text");
+                    if (frame.length() != 2 || frameId <= 0 || literal.length() > 100000)
+                        throw new IllegalArgumentException("Invalid native frame");
+                    if (frameId <= c.lastConfirmedFrame) throw new IllegalArgumentException("Stale native frame");
+                    c.panelReady = false;
+                    c.snapshot = new Session("current-session", c.selectedOffer.label, literal, frameId);
+                } else c.snapshot = new Session("current-session", c.selectedOffer.label, text, 0);
+            }
+            State connected = controller ? State.CONTROLLING : State.OBSERVING;
+            if (c.state != connected || text != null) {
+                c.state = connected;
                 changed();
             }
             schedule(() -> pollObserver(c, observer));
-        } catch (RuntimeException | LinkageError e) { stopObserver(c); }
+        } catch (Exception | LinkageError e) { stopObserver(c); }
+    }
+
+    long controlHandle(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return verified(desktop) && c.state == State.CONTROLLING && c.observer != c.stopRequestedHandle
+            ? c.observer : 0;
+    }
+
+    boolean controllerReady(Desktop desktop, long handle) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && c.observer == handle && c.panelReady && c.state == State.CONTROLLING;
+    }
+
+    void confirmDisplayedFrame(Desktop desktop, long handle, long frameId) {
+        Connection c = paired.get(desktop.localId);
+        if (c == null || closed.get() || !verified(desktop)) return;
+        executor.execute(() -> {
+            try {
+                if (!validControl(c, handle) || frameId <= c.lastConfirmedFrame) return;
+                if (c.snapshot == null || c.snapshot.frameId != frameId) return;
+                if (!nativeConfirmControllerFrame(handle, frameId)) {
+                    stopObserver(c, State.UNAVAILABLE);
+                    return;
+                }
+                c.lastConfirmedFrame = frameId;
+                if (!c.panelReady) { c.panelReady = true; changed(); }
+            } catch (RuntimeException | LinkageError e) { stopObserver(c, State.UNAVAILABLE); }
+        });
+    }
+
+    void sendControl(Desktop desktop, long handle, String text, TerminalControlPanel.Key key,
+            TerminalControlPanel.Completion completion) {
+        Connection c = paired.get(desktop.localId);
+        if (closed.get() || c == null || handle == 0 || (text == null) == (key == null)) {
+            finishControl(completion, TerminalControlPanel.Result.REJECTED);
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                if (!validControl(c, handle) || !c.panelReady || c.inputPending || c.inputUncertain) {
+                    finishControl(completion, TerminalControlPanel.Result.REJECTED);
+                    return;
+                }
+                c.inputPending = true;
+                long id = text != null ? nativeQueueControllerText(handle, text) :
+                    nativeQueueControllerKey(handle, keyCode(key));
+                if (id == 0) {
+                    c.inputPending = false;
+                    finishControl(completion, TerminalControlPanel.Result.REJECTED);
+                } else {
+                    long deadline = android.os.SystemClock.elapsedRealtime() + 10000;
+                    schedule(() -> pollControl(c, handle, id, deadline, completion));
+                }
+            } catch (RuntimeException | LinkageError e) {
+                c.inputPending = false;
+                c.inputUncertain = true;
+                finishControl(completion, TerminalControlPanel.Result.UNKNOWN);
+            }
+        });
+    }
+
+    private void pollControl(Connection c, long handle, long input, long deadline,
+            TerminalControlPanel.Completion completion) {
+        if (closed.get() || c.observer != handle) {
+            finishControl(completion, TerminalControlPanel.Result.UNKNOWN);
+            return;
+        }
+        int outcome = 0;
+        try { outcome = nativeControllerInputOutcome(handle, input); }
+        catch (RuntimeException | LinkageError ignored) {}
+        if (outcome == 1 && android.os.SystemClock.elapsedRealtime() < deadline) {
+            schedule(() -> pollControl(c, handle, input, deadline, completion));
+            return;
+        }
+        c.inputPending = false;
+        TerminalControlPanel.Result result;
+        if (outcome == 2) result = TerminalControlPanel.Result.COMMITTED;
+        else if (outcome == 3) result = TerminalControlPanel.Result.REJECTED;
+        else {
+            c.inputUncertain = true;
+            result = TerminalControlPanel.Result.UNKNOWN;
+        }
+        finishControl(completion, result);
+    }
+
+    private boolean validControl(Connection c, long handle) {
+        return !closed.get() && handle != c.stopRequestedHandle && c.observer == handle && c.state == State.CONTROLLING &&
+            nativeViewerRole(handle) == 2;
+    }
+
+    private void finishControl(TerminalControlPanel.Completion completion, TerminalControlPanel.Result result) {
+        activity.runOnUiThread(() -> { if (!closed.get() && !activity.isDestroyed()) completion.finish(result); });
+    }
+
+    private static int keyCode(TerminalControlPanel.Key key) {
+        switch (key) {
+            case ENTER: return 1;
+            case BACKSPACE: return 2;
+            case TAB: return 3;
+            case ESCAPE: return 4;
+            case UP: return 5;
+            case DOWN: return 6;
+            case LEFT: return 7;
+            case RIGHT: return 8;
+            case CTRL_C: return 9;
+            default: throw new IllegalArgumentException("Unsupported key");
+        }
     }
 
     void disconnectObserver(Desktop desktop) {
         Connection c = paired.get(desktop.localId);
         if (!closed.get() && verified(desktop)) executor.execute(() -> stopObserver(c));
+    }
+
+    void disconnectController(Desktop desktop, long exact) {
+        Connection c = paired.get(desktop.localId);
+        if (closed.get() || c == null || exact == 0 || !verified(desktop) || c.observer != exact) return;
+        c.stopRequestedHandle = exact;
+        executor.execute(() -> { if (c.observer == exact) stopObserver(c); });
     }
 
     private void stopObserver(Connection c) { stopObserver(c, State.DISCONNECTED); }
@@ -266,6 +404,11 @@ final class NativeDesktopBackend implements DesktopBackend {
         c.share = 0;
         c.shareFacade = null;
         c.snapshot = null;
+        c.selectedOffer = null;
+        c.inputPending = false;
+        c.inputUncertain = false;
+        c.panelReady = false;
+        c.lastConfirmedFrame = 0;
         c.offers = Collections.emptyList();
         c.state = terminal;
         try {
@@ -355,6 +498,12 @@ final class NativeDesktopBackend implements DesktopBackend {
         NativeKeystoreBridge shareFacade;
         volatile List<Offer> offers = Collections.emptyList();
         volatile long observer;
+        volatile long stopRequestedHandle;
+        Offer selectedOffer;
+        volatile boolean panelReady;
+        long lastConfirmedFrame;
+        boolean inputPending;
+        boolean inputUncertain;
         volatile State state = State.DISCONNECTED;
         volatile Session snapshot;
         Connection(Desktop desktop, long pairing, NativeKeystoreBridge facade) {
@@ -377,6 +526,12 @@ final class NativeDesktopBackend implements DesktopBackend {
     static native boolean nativeChooseShare(long handle, String offer);
     static native long nativeShareObserverHandle(long handle);
     static native void nativeCancelShares(long handle);
+    static native int nativeViewerRole(long handle);
+    static native String nativeTakeControllerFrame(long handle);
+    static native boolean nativeConfirmControllerFrame(long handle, long frameId);
+    static native long nativeQueueControllerText(long handle, String text);
+    static native long nativeQueueControllerKey(long handle, int key);
+    static native int nativeControllerInputOutcome(long handle, long input);
     static native int nativeObserverState(long handle);
     static native String nativeTakeObserverText(long handle);
     static native void nativeCancelObserver(long handle);

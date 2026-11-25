@@ -122,3 +122,19 @@ Selecting one requests that exact share and waits for desktop readiness and
 native presence approval before showing plain authenticated Observer text.
 Cancel retires the matching native share and view and clears transient data;
 restoring paired metadata does not restore any expired view or grant.
+
+## Controller ABI 3
+
+ABI 3 lists role-specific approved shares; the app never upgrades Observer into
+Controller. The control screen keeps the exact desktop and native handle and
+shows only Rust's verified literal terminal projection. Java installs each
+frame before confirming its exact ID; sending is then additionally gated by
+native readiness. Enter, Backspace, Tab, Escape, arrows and Ctrl+C are explicit
+actions. Single-line typing or paste is submitted only after pressing Send, is
+limited to 2048 UTF-8 bytes, and is not bracketed/multiline paste. Enter is
+separate. Android BiometricPrompt identifies the exact verified role and whether
+that approval lets the mobile device send input. A host-written receipt is
+distinct from rejection or uncertain outcome. The app does not replay unknown
+input; it suppresses further sending until the operator leaves the view.
+Stopping, navigating back or backgrounding the control screen clears the
+projection/draft locally and cancels its exact native controller handle.

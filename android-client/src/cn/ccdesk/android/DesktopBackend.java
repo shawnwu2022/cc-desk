@@ -6,7 +6,7 @@ import java.util.UUID;
 
 /** Internal app contract. No DTO in this file is a wire format or authorization token. */
 interface DesktopBackend {
-    enum State { DISCONNECTED, WAITING_FOR_DESKTOP, LOADING_SHARES, SHARES_READY, AWAITING_OBSERVER, OBSERVING, REVOKED, UNAVAILABLE }
+    enum State { DISCONNECTED, WAITING_FOR_DESKTOP, LOADING_SHARES, SHARES_READY, AWAITING_OBSERVER, OBSERVING, CONTROLLING, REVOKED, UNAVAILABLE }
 
     interface IdentityProvider {
         HardwareIdentity open(UUID localId, HardwareIdentity.Usage usage) throws Exception;
@@ -44,12 +44,15 @@ interface DesktopBackend {
         }
     }
 
+    enum Role { OBSERVER, CONTROLLER }
+
     final class Offer {
         final long owner;
         final String id;
         final String label;
-        Offer(long owner, String id, String label) {
-            this.owner = owner; this.id = id; this.label = label;
+        final Role role;
+        Offer(long owner, String id, String label, Role role) {
+            this.owner = owner; this.id = id; this.label = label; this.role = role;
         }
     }
 
@@ -57,8 +60,9 @@ interface DesktopBackend {
         final String id;
         final String title;
         final String text;
-        Session(String id, String title, String text) {
-            this.id = id; this.title = title; this.text = text;
+        final long frameId;
+        Session(String id, String title, String text, long frameId) {
+            this.id = id; this.title = title; this.text = text; this.frameId = frameId;
         }
     }
 

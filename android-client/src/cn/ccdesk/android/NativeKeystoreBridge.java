@@ -59,20 +59,20 @@ final class NativeKeystoreBridge {
         return receipts.readSealed(lowerHexLocalId);
     }
 
-    void requestApproval(long requestId, byte[] tbs, String session, String run, String generation) {
+    void requestApproval(long requestId, byte[] tbs, String session, String run, String generation, boolean controller) {
         if (requestId == 0 || tbs == null || tbs.length == 0 || tbs.length > 65536 ||
             !safeLabel(session) || !safeLabel(run) || !safeLabel(generation)) {
             nativeCompleteApproval(requestId, null);
             return;
         }
         byte[] captured = tbs.clone();
-        if (!main.post(() -> beginPrompt(requestId, captured))) {
+        if (!main.post(() -> beginPrompt(requestId, captured, controller))) {
             Arrays.fill(captured, (byte)0);
             nativeCompleteApproval(requestId, null);
         }
     }
 
-    private void beginPrompt(long requestId, byte[] tbs) {
+    private void beginPrompt(long requestId, byte[] tbs, boolean controller) {
         if (closed || pendingId != 0 || activity.isFinishing() || activity.isDestroyed()) {
             Arrays.fill(tbs, (byte)0);
             nativeCompleteApproval(requestId, null);
@@ -86,11 +86,11 @@ final class NativeKeystoreBridge {
             catch (GeneralSecurityException | RuntimeException ignored) {}
             finally { Arrays.fill(tbs, (byte)0); }
             HardwareIdentity.PendingApproval prepared = operation;
-            if (!main.post(() -> showPrompt(requestId, prepared)) && prepared != null) prepared.close();
+            if (!main.post(() -> showPrompt(requestId, prepared, controller)) && prepared != null) prepared.close();
         });
     }
 
-    private void showPrompt(long requestId, HardwareIdentity.PendingApproval operation) {
+    private void showPrompt(long requestId, HardwareIdentity.PendingApproval operation, boolean controller) {
         if (pendingId != requestId || closed) {
             if (operation != null) operation.close();
             return;
@@ -102,8 +102,8 @@ final class NativeKeystoreBridge {
         pendingOperation = operation;
         try {
             BiometricPrompt prompt = new BiometricPrompt.Builder(activity)
-                .setTitle("确认本次远程观察")
-                .setSubtitle("仅允许观察已在电脑上批准的会话")
+                .setTitle(controller ? "确认本次远程控制" : "确认本次只读观察")
+                .setSubtitle(controller ? "允许向电脑已批准的会话发送文字和按键" : "仅允许查看电脑已批准的会话")
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                 .setNegativeButton("取消", activity.getMainExecutor(),
                     (dialog, button) -> settle(requestId, null, true))
