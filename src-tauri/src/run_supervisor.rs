@@ -3884,11 +3884,37 @@ impl NativeRunAdmission {
         self,
         handoff: crate::remote_host_network::OriginalObserverHandoff,
     ) -> Result<NativeObserverOwner, SafeError> {
-        use cc_desk_remote_record::grant::DataRole;
-        use cc_desk_remote_security::Role;
         let (channel, approval, end) = handoff
             .into_parts(&self)
             .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?;
+        self.start_bound_observer(channel, approval, end)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn observer_admission_copy(&self) -> Result<Self, SafeError> {
+        self.scope()?;
+        Ok(Self {
+            pin: NativeRunPin {
+                run: self.pin.run.clone(),
+                origin: self.pin.origin.clone(),
+                state: self.pin.state.clone(),
+            },
+            access: self.access.clone(),
+            original: self.original.clone(),
+            authority: NativeRunAuthority {
+                state: self.authority.state.clone(),
+                resource: self.authority.resource.clone(),
+            },
+        })
+    }
+    pub(crate) fn start_bound_observer(
+        self,
+        channel: Arc<cc_desk_remote_security::RunningChannel>,
+        approval: crate::remote_host_network::NativeApprovalStop,
+        end: tokio::time::Instant,
+    ) -> Result<NativeObserverOwner, SafeError> {
+        use cc_desk_remote_record::grant::DataRole;
+        use cc_desk_remote_security::Role;
         let authority = channel.authority();
         if authority.local_role() != Role::Host
             || authority.data_role() != DataRole::Observer

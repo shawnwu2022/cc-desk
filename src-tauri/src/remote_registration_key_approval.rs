@@ -15,6 +15,13 @@ pub(crate) struct RegistrationSigningScope {
     cap: Instant,
 }
 impl RegistrationSigningScope {
+    #[cfg(feature = "remote-observer")]
+    pub(super) fn from_native_enrollment(
+        token: Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: Instant,
+    ) -> Self {
+        Self { token, cap }
+    }
     #[cfg(test)]
     pub(crate) fn test_new(
         token: Arc<crate::native_crypto::owner::NativeRevocation>,

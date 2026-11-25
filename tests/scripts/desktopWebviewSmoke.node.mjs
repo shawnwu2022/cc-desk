@@ -22,7 +22,7 @@ test('DesktopSmoke_RunsBeforeDestructiveProbesAndPreservesFailures_002', () => {
 test('DesktopSmoke_GuardsBeforeLaunchAndNeverInvokesAuthorityControls_003', () => {
  const s=read('scripts/test-desktop-webview.ps1')
  for(const guard of ['existing App','existing application data','Installed image must']) assert.ok(s.indexOf(guard)<s.indexOf('$app = Start-Process'))
- assert.deepEqual([...s.matchAll(/^    Invoke-Button (.*)$/gm)].map(m=>m[1]), ["@('Settings', '设置')","@('General', '通用')","@('Terminal', '终端')"])
+ assert.deepEqual([...s.matchAll(/^    Invoke-Button (.*)$/gm)].map(m=>m[1]), ["@('Settings', '设置')","@('General', '通用')","@('Terminal', '终端')","@('Remote Connections', '远程连接')"])
  assert.match(s,/normalExit = \$false/)
  assert.ok(s.indexOf('$result.normalExit = $true') > s.indexOf('$child.WaitForExit(10000)'))
  assert.match(s,/finally \{\s*\$result \| ConvertTo-Json/)
@@ -54,4 +54,12 @@ test('DesktopSmoke_RejectsReusedChildrenAndExistingWebviewState_005', () => {
  assert.ok(s.indexOf('$children[$id] = $process')<s.indexOf('$owned[$id] = $process'))
  assert.ok(!s.includes('.Kill($true)'))
  for(const token of ['WEBVIEW2_*','LocalApplicationData','io.github.shawnwu2022.ccdesk','existing default WebView data']) assert.ok(s.indexOf(token)<s.indexOf('$app = Start-Process'))
+})
+
+test('DesktopSmoke_OrdinaryPackageExposesNoRemoteAuthority_006', () => {
+ const s=read('scripts/test-desktop-webview.ps1')
+ assert.doesNotMatch(s,/Reveal-RemoteSection/)
+ assert.match(s,/Invoke-Button @\('Remote Connections', '远程连接'\)[\s\S]*Wait-Observed.*Native phone pairing is not available in this build/)
+ assert.match(s,/Unexpected remote authority or debug control in ordinary package/)
+ assert.match(s,/Capture-Evidence 'remote'/)
 })

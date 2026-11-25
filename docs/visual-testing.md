@@ -782,3 +782,8 @@ Fresh complete 255-case no-update CI with maxDiffPixels: 0 remains required.
 The 53 component/CLI-support tests cover configuration behavior, not pixel
 acceptance or actual AGY authentication. This is synthetic Linux browser evidence,
 not installed Windows WebView2 or real CLI certification.
+
+
+## RC4 Remote Connections navigation baseline review
+
+All 13 candidate PNGs from [run 45574543959](https://github.com/shawnwu2022/cc-desk/actions/runs/45574543959) were reviewed against the committed baselines. Their SHA-256 digests and dimensions match the capture inventory. Exact pixel comparisons found 132 to 230 changed pixels per image, all inside the left navigation area for the new Remote Connections icon. The original run passed 242 cases and failed the 13 old screenshot comparisons. Only the reviewed PNGs are refreshed: no screenshot masks or tolerances change. Passing a new ordinary comparison is still required.

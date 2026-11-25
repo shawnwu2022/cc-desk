@@ -1,12 +1,54 @@
-html,body { margin:0;min-height:100%; }
-body { overflow:auto;background:var(--bg-primary);color:var(--text-primary); }
-#browser-remote { width:min(100%,800px);box-sizing:border-box;margin:0 auto;padding:24px 16px; }
-#browser-remote .remote-panel { border:0;padding-top:0; }
-#browser-remote textarea { box-sizing:border-box;width:100%;font-size:16px; }
-.browser-grant-dialog { box-sizing:border-box;width:min(720px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:20px;border:1px solid var(--border-color,#777);border-radius:12px;background:var(--bg-primary,#fff);color:var(--text-primary,#111);overflow:auto;overflow-wrap:anywhere; }
-.browser-grant-dialog::backdrop { background:rgb(0 0 0 / 55%); }
-.browser-grant-dialog h2 { margin:0 0 12px;font-size:20px; }
-.browser-grant-dialog p { font-size:14px;line-height:1.5; }
-.browser-grant-dialog pre { white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;padding:12px;background:var(--bg-secondary,#f3f3f3);border-radius:6px; }
-.browser-grant-actions { position:sticky;bottom:0;display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;padding:12px 0;background:var(--bg-primary,#fff); }
-.browser-grant-actions button { min-height:44px;padding:8px 16px;font:inherit;cursor:pointer; }
+html, body { margin: 0; min-height: 100%; }
+body { overflow: auto; background: var(--bg-primary); color: var(--text-primary); }
+#browser-remote, .browser-registration-shell {
+  box-sizing: border-box;
+  width: min(100%, 800px);
+  margin-inline: auto;
+  padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+#browser-remote .remote-panel { border: 0; padding-top: 0; }
+#browser-remote .remote-panel > h3 { font-size: clamp(1.4rem, 5vw, 1.8rem); margin: 0; }
+#browser-remote .remote-panel p { line-height: 1.55; overflow-wrap: anywhere; }
+#browser-remote .remote-output { max-height: min(50vh, 55dvh); min-width: 0; border-radius: 12px; }
+#browser-remote textarea { box-sizing: border-box; width: 100%; font-size: 16px; }
+.browser-registration-shell { max-width: 560px; }
+.browser-registration-card {
+  display: grid; gap: 16px; padding: clamp(16px, 5vw, 28px);
+  border: 1px solid var(--border-color, #b5b0a8); border-radius: 18px;
+  background: var(--bg-secondary, #f5f3ee); overflow-wrap: anywhere;
+}
+.browser-registration-card h1 { margin: 4px 0 0; font-size: clamp(1.5rem, 6vw, 2rem); line-height: 1.2; }
+.browser-registration-card p { margin: 0; line-height: 1.55; }
+.browser-mobile-kicker { font-weight: 700; letter-spacing: .04em; font-size: .875rem; }
+.browser-registration-card ol { margin: 0; padding-inline-start: 1.25em; line-height: 1.55; }
+.browser-registration-card li + li { margin-top: 8px; }
+.browser-registration-status { border-inline-start: 3px solid currentColor; padding: 8px 12px; }
+.browser-registration-actions { display: grid; gap: 8px; }
+.browser-registration-actions button, .browser-terminal-link {
+  display: flex; align-items: center; justify-content: center; min-height: 48px;
+  box-sizing: border-box; padding: 8px 14px;
+  border: 1px solid var(--border-color, #b5b0a8); border-radius: 10px;
+  background: var(--bg-primary, #fff); color: var(--text-primary, #1a1816);
+  font: inherit; font-weight: 600; text-align: center;
+}
+.browser-registration-actions .browser-primary { background: #1e3a5f; border-color: #1e3a5f; color: #fff; }
+.browser-registration-actions button:disabled { cursor: default; opacity: .55; }
+.browser-terminal-link { text-decoration: underline; }
+#browser-remote button:focus-visible, .browser-registration-shell :is(button, a):focus-visible,
+.browser-grant-dialog button:focus-visible { outline: 2px solid var(--text-primary, #1a1816); outline-offset: 3px; }
+.browser-grant-dialog { box-sizing: border-box; width: min(720px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 20px; border: 1px solid var(--border-color, #777); border-radius: 12px; background: var(--bg-primary, #fff); color: var(--text-primary, #111); overflow: auto; overflow-wrap: anywhere; }
+.browser-grant-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.browser-grant-dialog h2 { margin: 0 0 12px; font-size: 20px; }
+.browser-grant-dialog p { font-size: 14px; line-height: 1.5; }
+.browser-grant-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding: 12px; background: var(--bg-secondary, #f3f3f3); border-radius: 6px; }
+.browser-grant-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; padding: 12px 0; background: var(--bg-primary, #fff); }
+.browser-grant-actions button { min-height: 48px; padding: 8px 16px; font: inherit; cursor: pointer; }
+@media (max-width: 520px) {
+  #browser-remote .remote-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #browser-remote button { min-block-size: 48px; min-inline-size: 48px; height: auto; white-space: normal; }
+  #browser-remote .remote-panel > label { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+  #browser-remote .remote-input > button { width: 100%; }
+  .browser-grant-dialog { padding: 16px; max-height: calc(100dvh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom))); }
+  .browser-grant-actions > button { flex: 1 1 8rem; }
+}

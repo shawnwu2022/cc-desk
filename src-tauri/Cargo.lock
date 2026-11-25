@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "cc-desk"
-version = "0.28.0-rc.3"
+version = "0.28.0-rc.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -480,6 +480,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "portable-pty",
+ "qrcode",
  "reqwest 0.11.27",
  "reqwest 0.13.2",
  "ring",
@@ -585,8 +586,11 @@ dependencies = [
  "cc-desk-remote-protocol",
  "cc-desk-remote-record",
  "futures-util",
+ "ring",
  "rustls",
  "rustls-pemfile",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
@@ -2710,7 +2714,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3615,6 +3619,12 @@ name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

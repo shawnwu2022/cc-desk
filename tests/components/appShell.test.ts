@@ -128,14 +128,17 @@ describe('Unified application shell', () => {
   })
 
   // 一级导航只有工作区、项目、设置，资源入口不进入全局导航。
-  it('Shell_ThreePrimaryDestinations_001', async () => {
+  it('Shell_FourPrimaryDestinations_001', async () => {
     const wrapper = render(AppShell)
     const buttons = wrapper.findAll('[data-primary-section]')
-    expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'settings'])
-    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Settings'])
+    expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'remote', 'settings'])
+    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Remote Connections', 'Settings'])
     await buttons[1].trigger('click')
     expect(useShellStore().section).toBe('projects')
     expect(buttons[1].attributes('aria-current')).toBe('page')
+    await buttons[2].trigger('click')
+    expect(useShellStore().section).toBe('remote')
+    expect(buttons[2].attributes('aria-current')).toBe('page')
     expect(wrapper.findAll('nav[aria-label="Primary navigation"]')).toHaveLength(1)
   })
   // 支持窗口的逻辑最小尺寸是1024×640，不以CSS最小宽度制造横向溢出。
@@ -327,7 +330,7 @@ describe('Unified application shell', () => {
   it('Shell_LocalizedNavigation_018', async () => {
     const wrapper = render(PrimaryNav)
     ;(i18n.global.locale as any).value = 'zh'; await nextTick()
-    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('aria-label'))).toEqual(['工作区', '项目', '设置'])
+    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('aria-label'))).toEqual(['工作区', '项目', '远程连接', '设置'])
   })
   // 会话栏隐藏时Escape不会改变其桌面显示偏好。
   it('Shell_HiddenPanelIgnoresEscape_019', async () => {

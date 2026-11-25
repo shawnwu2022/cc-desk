@@ -880,6 +880,21 @@ impl NativeRuntime {
         Ok((binding, caller, input))
     }
     #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_owner_share_run(
+        &self,
+        caller: &CallerIdentity,
+        run_id: String,
+        generation: u32,
+    ) -> Result<crate::run_supervisor::NativeRunAdmission, SafeError> {
+        self.binding()?.check_admitted(caller)?;
+        let run = input_run_key(&run_id, generation)?;
+        let access = self.service.access(caller, &run)?;
+        self.supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)
+    }
+    #[cfg(all(feature = "remote-host", windows))]
     pub(crate) fn admit_host_configuration<T: Runtime>(
         &self,
         webview: &Webview<T>,

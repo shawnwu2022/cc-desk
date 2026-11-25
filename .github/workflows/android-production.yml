@@ -1,0 +1,151 @@
+name: Android production candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: Monotonically increasing Android versionCode for this exact release
+        required: true
+        type: number
+
+  workflow_call:
+    inputs:
+      version_code:
+        required: true
+        type: number
+    outputs:
+      artifact_id:
+        value: ${{ jobs.android.outputs.artifact_id }}
+      signer_sha256:
+        value: ${{ jobs.android.outputs.signer_sha256 }}
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: android-production-candidate
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Build and verify signed Android arm64 candidate
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: windows-2025
+    timeout-minutes: 40
+    environment: android-production
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      signer_sha256: ${{ steps.sign.outputs.signer_sha256 }}
+    env:
+      VERSION_CODE: ${{ inputs.version_code }}
+
+    steps:
+      - name: Admit exact protected main and its ordinary push CI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Request([string]$endpoint) {
+            $raw = gh api $endpoint
+            if ($LASTEXITCODE -ne 0) { throw 'Android source admission API request failed' }
+            return $raw | ConvertFrom-Json
+          }
+          $envConfig = Request "repos/$env:GITHUB_REPOSITORY/environments/android-production"
+          if ($envConfig.deployment_branch_policy.protected_branches -ne $true -or
+              @($envConfig.protection_rules | Where-Object type -CEQ 'required_reviewers').Count -ne 1) {
+            throw 'Configure android-production for protected branches and required reviewers before using signing material'
+          }
+          $branch = Request "repos/$env:GITHUB_REPOSITORY/branches/main"
+          if (!$branch.protected -or $branch.commit.sha -cne $env:GITHUB_SHA) {
+            throw 'Only the exact current protected main SHA is eligible'
+          }
+          $search = Request "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=$env:GITHUB_SHA&per_page=1"
+          $matches = @($search.workflow_runs | Where-Object { $_.head_sha -ceq $env:GITHUB_SHA -and $_.event -ceq 'push' -and $_.head_branch -ceq 'main' })
+          if ($matches.Count -ne 1 -or $matches[0].status -cne 'completed' -or $matches[0].conclusion -cne 'success') {
+            throw 'The latest ordinary push CI for the exact protected main SHA must be successful'
+          }
+          $ci = $matches[0]
+          $execution = Request "repos/$env:GITHUB_REPOSITORY/actions/runs/$($ci.id)/attempts/$($ci.run_attempt)/jobs?per_page=100"
+          if ($execution.total_count -gt 100 -or @($execution.jobs | Where-Object { $_.conclusion -cne 'success' }).Count -ne 0) {
+            throw 'Ordinary CI jobs could not all be authenticated as successful'
+          }
+          foreach ($name in @('Frontend checks','Rust checks','Disposable roundtrip compile-only policy (no native acceptance)')) {
+            if (@($execution.jobs | Where-Object name -CEQ $name).Count -ne 1) { throw "Required CI job unavailable: $name" }
+          }
+          if ($env:VERSION_CODE -cnotmatch '^[1-9][0-9]{0,9}$' -or [long]$env:VERSION_CODE -gt 2100000000) {
+            throw 'Android versionCode out of permitted range'
+          }
+          "ANDROID_ADMITTED_CI_RUN=$($ci.id)" >> $env:GITHUB_ENV
+          "ANDROID_ADMITTED_CI_ATTEMPT=$($ci.run_attempt)" >> $env:GITHUB_ENV
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+
+      - name: Prepare the pinned Java dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $jar = Join-Path $env:RUNNER_TEMP 'ccdesk-zxing-core-3.5.3.jar'
+          Invoke-WebRequest -Uri 'https://repo.maven.apache.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar' -OutFile $jar
+          if ((Get-FileHash -LiteralPath $jar -Algorithm SHA256).Hash -ine '8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82') {
+            throw 'Unexpected pinned ZXing dependency digest'
+          }
+          "ANDROID_ZXING_JAR=$jar" >> $env:GITHUB_ENV
+          "ANDROID_BUILD_WORK=$env:RUNNER_TEMP\ccdesk-android-production-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_ENV
+
+      - name: Execute locked Android native security fixtures
+        shell: pwsh
+        run: |
+          cargo +1.100.0 test --locked --manifest-path android-client/native/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Android native security fixtures failed' }
+          "ANDROID_NATIVE_SECURITY_TESTS=passed" >> $env:GITHUB_ENV
+
+      - name: Build locked native library and release DEX
+        shell: pwsh
+        run: |
+          ./android-client/build-production.ps1 -Phase Build -WorkDirectory $env:ANDROID_BUILD_WORK -SourceSha $env:GITHUB_SHA -VersionCode $env:VERSION_CODE -Sdk $env:ANDROID_SDK_ROOT -Jdk $env:JAVA_HOME_17_X64 -ZxingCore $env:ANDROID_ZXING_JAR
+
+      - name: Sign and independently verify the exact APK bytes
+        id: sign
+        shell: pwsh
+        env:
+          ANDROID_RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ vars.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_CERT_SHA256: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
+        run: |
+          $env:JAVA_HOME = $env:JAVA_HOME_17_X64
+          ./android-client/build-production.ps1 -Phase Sign -WorkDirectory $env:ANDROID_BUILD_WORK -SourceSha $env:GITHUB_SHA -VersionCode $env:VERSION_CODE -Sdk $env:ANDROID_SDK_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'APK signing failed' }
+          "signer_sha256=$($env:ANDROID_RELEASE_CERT_SHA256.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Revalidate current protected main before retaining candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $raw = gh api "repos/$env:GITHUB_REPOSITORY/branches/main"
+          if ($LASTEXITCODE -ne 0) { throw 'Current protected main could not be verified' }
+          $branch = $raw | ConvertFrom-Json
+          if (!$branch.protected -or $branch.commit.sha -cne $env:GITHUB_SHA) {
+            throw 'Main moved; do not retain stale signed Android candidate'
+          }
+
+      - name: Retain immutable signed candidate only
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.ANDROID_BUILD_WORK }}/publishable-candidate/*
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7

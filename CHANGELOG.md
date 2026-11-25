@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.4] - 2026-11-25
+
+### Added
+
+- A dedicated Remote Connections view for first-time Windows setup, Android pairing, and sharing or stopping an explicitly selected session. Windows keeps the signing keys local; Relay administrators receive only public registration details.
+- Native Android device pairing by QR or code, a multi-computer shared-session list, and a remote control console with automatically refreshed session output and single-line input plus common terminal keys.
+- Separate read-only and control permissions. Desktop approval grants control only to the selected device and session, ends on expiry or revocation, and never automatically resends input with an uncertain delivery result.
+
+### Fixed
+
+- Keep developer-only remote setup and trial panels out of the published desktop UI.
+
+### Validation and limits
+
+- Test-channel prerelease only; stable Latest and production Relay are unchanged. Control covers approved CC Desk sessions on Windows, not device administration or arbitrary remote desktop interaction. Multi-line paste is not enabled.
+- Security paths are exercised with real protocol, authorization and session owners using isolated synthetic data. Hardware-backed Android approval on a physical phone and the production relay route are not certified by these checks.
+
 ## [0.28.0-rc.3] - 2026-11-24
 
 ### Changed

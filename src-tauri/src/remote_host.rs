@@ -224,12 +224,19 @@ pub(crate) struct ServiceState {
         tokio::sync::oneshot::Receiver<()>,
     )>,
 }
+#[cfg(all(windows, feature = "remote-observer"))]
+type NativeControllerHosts = Vec<(
+    crate::run_supervisor::NativeRunNetworkOrigin,
+    Arc<RemoteHostService>,
+)>;
 pub(crate) struct RemoteHostService {
     #[cfg(windows)]
     pub(crate) unattended: unattended::UnattendedCustody,
     #[cfg(windows)]
     pub(crate) short_session: short_session::ShortSessionService,
     pub(crate) state: Mutex<ServiceState>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    native_controller_hosts: Mutex<NativeControllerHosts>,
     pub(crate) network: Arc<crate::remote_host_network::HostNetworkCustody>,
     #[cfg(windows)]
     pub(crate) registration: Arc<crate::remote_host_controller::startup::RegistrationCustody>,
@@ -244,6 +251,8 @@ impl Default for RemoteHostService {
             network: Arc::new(Default::default()),
             #[cfg(windows)]
             registration: Arc::new(Default::default()),
+            #[cfg(all(windows, feature = "remote-observer"))]
+            native_controller_hosts: Mutex::new(Vec::new()),
             state: Mutex::new(ServiceState {
                 host: HostSlot::Empty,
                 delegation: None,
@@ -683,6 +692,39 @@ impl RemoteHostService {
         checkout.finish();
         result
     }
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn native_controller_host(
+        &self,
+        admission: &crate::run_supervisor::NativeRunAdmission,
+    ) -> Result<Arc<Self>, crate::cli::types::SafeError> {
+        let state = self.state.lock();
+        if state.closing || state.retired {
+            return Err(crate::cli::profiles::error("REMOTE_HOST_CLOSED"));
+        }
+        let mut children = self.native_controller_hosts.lock();
+        if let Some((_, owner)) = children
+            .iter()
+            .find(|(origin, _)| origin.matches(admission))
+        {
+            return Ok(owner.clone());
+        }
+        children.retain(|(origin, child)| {
+            origin.is_live()
+                || Arc::strong_count(child) > 1
+                || !matches!(child.state.lock().host, HostSlot::Empty)
+        });
+        if children.len() >= 8 {
+            return Err(crate::cli::profiles::error("REMOTE_HOST_BUSY"));
+        }
+        let origin = admission.network_origin()?;
+        let child = Arc::new(Self::default());
+        children.push((origin, child.clone()));
+        Ok(child)
+    }
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) async fn wait_native_controller_peer(&self) -> bool {
+        self.join_peer_pump().await
+    }
     async fn pump_peer(
         &self,
         channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
@@ -909,6 +951,21 @@ impl RemoteHostService {
         tauri::async_runtime::spawn(async move {
             if let Some(native) = prepare {
                 let pins = std::mem::take(&mut original.state.lock().pins);
+                #[cfg(all(windows, feature = "remote-observer"))]
+                let pins = {
+                    let mut owners = pins;
+                    for child in original
+                        .native_controller_hosts
+                        .lock()
+                        .iter()
+                        .map(|(_, child)| child)
+                    {
+                        let mut state = child.state.lock();
+                        state.closing = true;
+                        owners.extend(std::mem::take(&mut state.pins));
+                    }
+                    owners
+                };
                 original.network.begin_shutdown();
                 #[cfg(windows)]
                 original.registration.begin_shutdown();
@@ -934,6 +991,7 @@ impl RemoteHostService {
                 activation_known,
                 registration_known,
                 unattended_known,
+                controller_runs_known,
             ) = tokio::join!(
                 client.shutdown(),
                 async move {
@@ -967,7 +1025,8 @@ impl RemoteHostService {
                     {
                         true
                     }
-                }
+                },
+                original.wait_native_controller_runs(),
             );
             if client_result.is_err()
                 || !network_known
@@ -978,6 +1037,7 @@ impl RemoteHostService {
                 || !activation_known
                 || !registration_known
                 || !unattended_known
+                || !controller_runs_known
             {
                 original.mark_unknown();
                 return;
@@ -997,6 +1057,36 @@ impl RemoteHostService {
                 exit(code);
             }
         })
+    }
+    async fn wait_native_controller_runs(&self) -> bool {
+        #[cfg(all(windows, feature = "remote-observer"))]
+        {
+            let children: Vec<_> = self
+                .native_controller_hosts
+                .lock()
+                .iter()
+                .map(|(_, child)| child.clone())
+                .collect();
+            for child in children {
+                child.state.lock().closing = true;
+                let (net, pump, writer) =
+                    tokio::join!(child.wait_host_network(), child.join_peer_pump(), async {
+                        loop {
+                            match child.with_host(|host| {
+                                host.map_or(WriterRetirement::Joined, NativeHost::observe_shutdown)
+                            }) {
+                                Some(WriterRetirement::Joined) => break true,
+                                Some(WriterRetirement::Unknown) => break false,
+                                _ => tokio::time::sleep(Duration::from_millis(25)).await,
+                            }
+                        }
+                    });
+                if !net || !pump || !writer {
+                    return false;
+                }
+            }
+        }
+        true
     }
     async fn wait_source_materials(&self) -> bool {
         loop {

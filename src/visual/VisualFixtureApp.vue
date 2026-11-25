@@ -7,6 +7,7 @@ import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import WorkspaceView from '@/components/workspace/WorkspaceView.vue'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
 import ProjectsView from '@/components/projects/ProjectsView.vue'
+import RemoteConnectionsView from '@/components/remote/RemoteConnectionsView.vue'
 import SettingsView from '@/components/settings/SettingsView.vue'
 import TerminalThemePreview from '@/components/settings/TerminalThemePreview.vue'
 import ProjectResourcesDrawer from '@/components/workspace/ProjectResourcesDrawer.vue'
@@ -161,6 +162,7 @@ onMounted(async () => { await nextTick(); ready.value = true })
         </template>
       </WorkspaceView>
       <ProjectsView v-else-if="shell.section === 'projects'" />
+      <RemoteConnectionsView v-else-if="shell.section === 'remote'" />
       <SettingsView v-else />
       <template #context><ProjectResourcesDrawer /></template>
     </AppShell>

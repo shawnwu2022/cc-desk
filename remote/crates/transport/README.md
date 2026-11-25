@@ -99,3 +99,23 @@ checked work, then rechecks the original owner and deadline before reporting
 `InstalledLocked`. Failure retains the existing unconfirmed delivery receipt;
 cleanup still cancels and joins the original resources. Global driver cancellation
 priority and ordinary tunnel retirement semantics are unchanged.
+
+## Relay enrollment control
+
+现有原生 Relay 准入密钥可通过 wss::request_host_enrollment 或
+wss::request_phone_enrollment 执行明确角色的配对控制请求。调用方必须传入
+已批准的自托管 WSS 地址及其解析地址，确保操作前提供对应角色的独立签名器。
+一个绝对时限覆盖 TLS、精确协议协商、挑战签名、发送及验证响应。该通道不
+产生数据套接字，也不配置原生 AppBind、角色或权限。
+
+收到 native_approval 后仍须用原有受信桌面身份验证精确的
+邀请、请求、路由和 Phone 端点身份。若请求发送后超时、链路错误或返回无效数据，
+结果是 OutcomeUnknown：不要自动重放写操作，用 LIST 或 STATUS 对账。调用方
+若取消已经开始的请求，也按结果不确定处理。新建配对码只应在可信本地 UI 短时
+展示，不记录到日志；Opaque 签名信封同样不可记录。
+
+临时分享通过 request_host_shares / request_phone_shares。请求仍使用近日会话
+已有的 Relay 准入密钥和固定的 WSS 地址；仅已配对设备可以访问自身隧道。
+客户端验证分享目录 SHA-256 以及选择的隧道、目录摘要、提议 ID、随机选择 ID；
+Pending 或 Relay 回执都不代表用户授权。Android 只有独立验证受信桌面签发的
+ready_envelope 与当前选择完全一致后，才可继续原有只读身份绑定。

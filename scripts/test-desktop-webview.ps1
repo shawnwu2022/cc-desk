@@ -32,33 +32,6 @@ function Invoke-Button([string[]]$Names) {
     if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'BLOCKED_UI_INVOKE' }
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
 }
-function Reveal-RemoteSection {
-    $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-        $_.Current.Name -cin @('Disconnect', '断开连接') -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
-    })
-    if ($matches.Count -ne 1) { return $false }
-    $target = $matches[0]
-    if (!$target.Current.IsOffscreen) { return $true }
-    $pattern = $null
-    if ($target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern)) {
-        ([System.Windows.Automation.ScrollItemPattern]$pattern).ScrollIntoView()
-        return $true
-    }
-    $ancestor = $target
-    for ($depth=0; $depth -lt 16; $depth++) {
-        $ancestor = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
-        if (!$ancestor -or [System.Windows.Automation.AutomationElement]::Compare($ancestor, $window)) { break }
-        $pattern = $null
-        if ($ancestor.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern, [ref]$pattern)) {
-            $scroll = [System.Windows.Automation.ScrollPattern]$pattern
-            if ($scroll.Current.VerticallyScrollable) {
-                $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll, 100)
-                return $true
-            }
-        }
-    }
-    throw 'BLOCKED_UI_OBSERVATION: native remote section scrolling unavailable'
-}
 function Capture-Evidence([string]$Name) {
     $elements = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
     if ($elements.Count -gt 10000) { throw 'UI tree exceeds observation bound' }
@@ -138,12 +111,12 @@ try {
     if (!$agy.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle) -or ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'BLOCKED_UI_OBSERVATION: AGY pressed state unavailable or enabled' }
     Capture-Evidence 'general'
     Invoke-Button @('Terminal', '终端')
-    $null = Wait-Observed { Reveal-RemoteSection } 'remote section native scroll'
-    $null = Wait-Observed { Find-Control @('Locked — no native connection is installed.', '已锁定：尚未安装原生连接。') ([System.Windows.Automation.ControlType]::Text) } 'remote locked'
-    $disconnect = Wait-Observed { Find-Control @('Disconnect', '断开连接') ([System.Windows.Automation.ControlType]::Button) } 'remote disconnect'
-    if ($disconnect.Current.IsEnabled) { throw 'Remote disconnect unexpectedly enabled' }
-    if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
+    if (Find-Control @('Disconnect', '断开连接') ([System.Windows.Automation.ControlType]::Button)) { throw 'Retired remote panel is visible in terminal settings' }
     Capture-Evidence 'terminal'
+    Invoke-Button @('Remote Connections', '远程连接')
+    $null = Wait-Observed { Find-Control @('Native phone pairing is not available in this build.', '此版本尚不支持原生手机配对。') $null } 'ordinary package remote unavailable'
+    if (Find-Control @('Connect relay', '连接中转', 'Disconnect', '断开连接', 'Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）', 'One-off remote connection', '单次远程连接', '远程试用入口（默认关闭）') $null) { throw 'Unexpected remote authority or debug control in ordinary package' }
+    Capture-Evidence 'remote'
     Observe-Children
     $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
     if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }

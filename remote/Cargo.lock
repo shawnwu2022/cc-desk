@@ -217,6 +217,8 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-pemfile",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

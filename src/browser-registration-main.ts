@@ -26,13 +26,24 @@ if(element)createApp(defineComponent({setup(){
    status.value=`Browser profile stored (revision ${result.revision}). Open the terminal page to request a connection.`
   }catch{status.value='Locked'}finally{busy.value=false}
  }
- return()=>h('main',{'data-browser-registration':''},[
-  h('h1','Browser registration'),
-  h('p','Requires an independently approved same-origin source, ephemeral device keys and an exact Host pin. Registration and browser storage require separate approval. This page does not connect a terminal.'),
-  h('p',{role:'status'},status.value),
-  h('button',{type:'button',disabled:preparing.value,onClick:prepare},'Prepare registration'),
-  h('button',{type:'button',disabled:started.value||!prepared.value,onClick:register},'Start registration'),
-  h('button',{type:'button',disabled:!busy.value&&!prepared.value,onClick:close},'Cancel'),
-  h('a',{href:'./browser-remote.html'},'Open terminal'),
+ return()=>h('main',{'data-browser-registration':'',class:'browser-registration-shell'},[
+  h('section',{class:'browser-registration-card','aria-labelledby':'browser-registration-title'},[
+   h('header',[
+    h('p',{class:'browser-mobile-kicker'},'CC Desk · Remote'),
+    h('h1',{id:'browser-registration-title'},'Pair this device'),
+   ]),
+   h('ol',[
+    h('li','Prepare a device identity and review the connection details.'),
+    h('li','After approval, start registration while keeping this page visible.'),
+   ]),
+   h('p',{class:'browser-registration-status',role:'status'},status.value),
+   h('div',{class:'browser-registration-actions'},[
+    h('button',{type:'button',class:!prepared.value?'browser-primary':undefined,disabled:preparing.value,onClick:prepare},'Prepare registration'),
+    h('button',{type:'button',class:prepared.value?'browser-primary':undefined,disabled:started.value||!prepared.value,onClick:register},'Start registration'),
+    h('button',{type:'button',disabled:!busy.value&&!prepared.value,onClick:close},'Cancel'),
+   ]),
+   h('a',{href:'./browser-remote.html',class:'browser-terminal-link'},'Open terminal'),
+   h('p','Registration and browser storage require separate approval. This page does not connect a terminal.'),
+  ]),
  ])
 }})).mount(element)
