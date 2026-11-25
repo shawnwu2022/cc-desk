@@ -253,3 +253,11 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeTakeObs
     .flatten();
     result.unwrap_or_else(ptr::null_mut)
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeAndroidAbiVersion(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jint {
+    1
+}
