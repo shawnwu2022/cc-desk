@@ -1,4 +1,8 @@
 use super::{ApprovalLease, ApprovalMachine, DIALOG_ACTIVE};
+#[path = "remote_native_observer_enrollment_control.rs"]
+pub(crate) mod control;
+#[path = "remote_native_observer_enrollment_ipc.rs"]
+pub(crate) mod ipc;
 #[path = "remote_native_observer_enrollment_setup.rs"]
 pub(crate) mod setup;
 #[path = "remote_native_observer_enrollment_store.rs"]

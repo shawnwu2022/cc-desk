@@ -136,6 +136,9 @@ pub(crate) struct ApprovedSetup {
     pub(crate) signing: crate::remote_host_approval::RegistrationSigningScope,
 }
 impl SetupApproval {
+    pub(crate) fn pending(&self) -> bool {
+        self.machine.waiting()
+    }
     pub(crate) fn cancel(&self) {
         self.machine.cancel();
     }
@@ -172,6 +175,9 @@ pub(crate) struct PublicRegistrationMetadata {
     relay_public_key_sec1: String,
 }
 impl MetadataApproval {
+    pub(crate) fn pending(&self) -> bool {
+        self.machine.waiting()
+    }
     pub(crate) fn cancel(&self) {
         self.machine.cancel();
     }
