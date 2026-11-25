@@ -5,9 +5,8 @@ pub(crate) struct FrozenHostApproval {
     pub(super) fields: HostApprovalDescription,
     pub(super) origin: NativeRunNetworkOrigin,
     #[cfg(windows)]
-    pub(super) formal_observer_endpoint: Option<
-        crate::remote_host_controller::startup::configuration::FormalObserverEndpoint,
-    >,
+    pub(super) formal_observer_endpoint:
+        Option<crate::remote_host_controller::startup::configuration::FormalObserverEndpoint>,
     cap: Instant,
     #[cfg(windows)]
     pub(super) supplier: Option<crate::native_crypto::host::FrozenHostSupplier>,

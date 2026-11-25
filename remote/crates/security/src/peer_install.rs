@@ -116,9 +116,9 @@ impl Shared {
         }
     }
     pub(crate) fn try_matches_installed_fence(&self, fence: u64) -> bool {
-        self.admission.try_lock().is_ok_and(
-            |state| matches!(*state, Admission::Ready(installed) if installed == fence),
-        )
+        self.admission
+            .try_lock()
+            .is_ok_and(|state| matches!(*state, Admission::Ready(installed) if installed == fence))
     }
     pub(crate) fn check_data(&self, fence: u64) -> Result<(), DataError> {
         match *self.admission.lock().map_err(|_| DataError::Closed)? {

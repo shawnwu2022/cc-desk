@@ -119,8 +119,10 @@ fn NativeRegistrationStart_ObserverFreezesOneSecuredRelayEndpoint_018() {
     assert_eq!(frozen.origin.as_str(), "wss://relay.invalid:8443/one");
     assert_eq!(frozen.address.port(), 8443);
     request["address"] = "192.0.2.1:443".into();
-    assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err(),
-        "Observer must reject a mismatched configured transport endpoint before approval");
+    assert!(
+        FrozenRegistrationStart::parse(&request.to_string()).is_err(),
+        "Observer must reject a mismatched configured transport endpoint before approval"
+    );
 }
 
 #[test]
@@ -131,7 +133,10 @@ fn NativeRegistrationStart_ObserverFormalExplicitChoice_019() {
     request["origin"] = "wss://relay.invalid:8443/one".into();
     request["address"] = "192.0.2.1:8443".into();
     let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
-    assert_eq!(frozen.product_role_enabled(), cfg!(feature = "remote-observer"));
+    assert_eq!(
+        frozen.product_role_enabled(),
+        cfg!(feature = "remote-observer")
+    );
     let owner = NativeRegistrationKeyApproval::test_pending(frozen);
     assert!(owner.take().is_none(), "no local consent");
     owner.test_complete(true);

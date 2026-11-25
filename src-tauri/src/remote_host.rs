@@ -527,7 +527,10 @@ impl RemoteHostService {
                 Err(HostNetworkError::Closed)
             } else if tokio::time::Instant::now() >= end {
                 Err(HostNetworkError::Deadline)
-            } else if observer.as_ref().is_some_and(|guard| !guard.is_current(&state.source_slot)) {
+            } else if observer
+                .as_ref()
+                .is_some_and(|guard| !guard.is_current(&state.source_slot))
+            {
                 Err(HostNetworkError::Authority)
             } else {
                 Ok(())

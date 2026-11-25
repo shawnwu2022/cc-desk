@@ -119,10 +119,10 @@ impl FrozenRegistrationStart {
         (cfg!(feature = "remote-observer")
             && matches!(self.access, FrozenAccess::ObserverOnce)
             && !self.address.ip().is_loopback())
-            .then(|| FormalObserverEndpoint {
-                address: self.address,
-                origin: self.origin.clone(),
-            })
+        .then(|| FormalObserverEndpoint {
+            address: self.address,
+            origin: self.origin.clone(),
+        })
     }
     pub(super) fn data_role(&self) -> DataRole {
         match self.access {

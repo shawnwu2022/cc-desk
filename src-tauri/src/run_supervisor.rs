@@ -3310,48 +3310,40 @@ mod native_observer_lifetime_tests {
             std::future::pending(),
             Instant::now() + Duration::from_secs(1),
         ));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), &mut wait)
-                .await
-                .is_err()
-        );
+        assert!(tokio::time::timeout(Duration::from_millis(10), &mut wait)
+            .await
+            .is_err());
         original.send_replace(true);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(250), &mut wait)
-                .await
-                .is_ok()
-        );
+        assert!(tokio::time::timeout(Duration::from_millis(250), &mut wait)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
     async fn ObserverLifetime_RevocationAndExpiredDeadlineStopImmediately_002() {
         let (_run, stop) = watch::channel(false);
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(250),
-                wait_for_observer_stop(
-                    stop.clone(),
-                    std::future::ready(()),
-                    Instant::now() + Duration::from_secs(1)
-                )
+        assert!(tokio::time::timeout(
+            Duration::from_millis(250),
+            wait_for_observer_stop(
+                stop.clone(),
+                std::future::ready(()),
+                Instant::now() + Duration::from_secs(1)
             )
-            .await
-            .is_ok()
-        );
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(250),
-                wait_for_observer_stop(stop, std::future::pending(), Instant::now())
-            )
-            .await
-            .is_ok()
-        );
+        )
+        .await
+        .is_ok());
+        assert!(tokio::time::timeout(
+            Duration::from_millis(250),
+            wait_for_observer_stop(stop, std::future::pending(), Instant::now())
+        )
+        .await
+        .is_ok());
     }
 
     #[cfg(windows)]
     #[tokio::test]
     async fn ObserverLifetime_OriginalApprovalRetiresOwnerAndKeepsJoin_003() {
-        use super::{NativeObserverOwner, wait_for_observer_retirement};
+        use super::{wait_for_observer_retirement, NativeObserverOwner};
         use crate::{
             native_crypto::owner::NativeRevocation, remote_host_network::NativeApprovalStop,
         };
@@ -3407,8 +3399,8 @@ mod native_observer_lifetime_tests {
     #[tokio::test]
     async fn ObserverLifetime_InstalledExactPeerRetiresWithOriginalApproval_007() {
         use super::{
-            NativeObserverInstallReceipt, NativeObserverOwner, finish_observer_task,
-            observer_task_result, wait_for_observer_retirement,
+            finish_observer_task, observer_task_result, wait_for_observer_retirement,
+            NativeObserverInstallReceipt, NativeObserverOwner,
         };
         use crate::{
             native_crypto::owner::NativeRevocation, remote_host_network::NativeApprovalStop,
@@ -3416,8 +3408,8 @@ mod native_observer_lifetime_tests {
         };
         use cc_desk_remote_record::grant::{DataRole, SessionScope};
         use std::sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         };
         use tokio::sync::oneshot;
 
@@ -3430,7 +3422,10 @@ mod native_observer_lifetime_tests {
                 generation: "1".into(),
             },
             Arc::new(move || {
-                assert!(!clock_check.load(Ordering::Acquire), "publication must not call provider");
+                assert!(
+                    !clock_check.load(Ordering::Acquire),
+                    "publication must not call provider"
+                );
                 Ok(1000)
             }),
             DataRole::Observer,
@@ -3582,17 +3577,13 @@ mod native_observer_lifetime_tests {
         );
         {
             let mut join = std::pin::pin!(retire_observer_capture(&mut capture));
-            assert!(
-                tokio::time::timeout(Duration::from_millis(25), &mut join)
-                    .await
-                    .is_err()
-            );
+            assert!(tokio::time::timeout(Duration::from_millis(25), &mut join)
+                .await
+                .is_err());
             release.send(()).unwrap();
-            assert!(
-                tokio::time::timeout(Duration::from_millis(500), &mut join)
-                    .await
-                    .unwrap()
-            );
+            assert!(tokio::time::timeout(Duration::from_millis(500), &mut join)
+                .await
+                .unwrap());
         }
         assert!(capture.is_none(), "known join must release the worker slot");
     }
@@ -3792,7 +3783,10 @@ pub(crate) struct NativeObserverOwner {
 impl NativeObserverOwner {
     #[cfg(all(
         windows,
-        any(feature = "remote-observer", all(test, feature = "remote-observer-local-acceptance"))
+        any(
+            feature = "remote-observer",
+            all(test, feature = "remote-observer-local-acceptance")
+        )
     ))]
     pub(crate) async fn wait_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
         let receipt = self.installation.as_mut()?.await.ok();
