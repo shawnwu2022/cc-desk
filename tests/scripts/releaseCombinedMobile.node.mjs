@@ -9,8 +9,8 @@ import { verifyAndroidSignature, verifyHostedAssets, verifyProof } from '../../s
 
 const cli = fileURLToPath(new URL('../../scripts/release-combined-mobile.mjs', import.meta.url))
 const sha = 'a'.repeat(40), signer = 'b'.repeat(64), version = '0.28.0-rc.4'
-const expected = { sha, signer, version, versionCode:'4', run:'10', attempt:'2', ciRun:'5', ciAttempt:'1' }
-const proof = { sourceSha:sha, version, versionCode:4, workflowRunId:'10', workflowRunAttempt:'2',
+const expected = { sha, signer, version, versionCode:'28004', run:'10', attempt:'2', ciRun:'5', ciAttempt:'1' }
+const proof = { sourceSha:sha, version, versionCode:28004, workflowRunId:'10', workflowRunAttempt:'2',
   ordinaryCiRunId:'5', ordinaryCiRunAttempt:'1', abi:'arm64-v8a', rustToolchain:'1.100.0',
   ndkRevision:'27.3.13750724', elf16KiB:true, apk16KiB:true, signerCertSha256:signer,
   signedSha256:'c'.repeat(64), elfSha256:'d'.repeat(64), lockSha256:'e'.repeat(64),
@@ -21,18 +21,38 @@ const gate = {...expected, assets}
 const draft = {tag_name:'v'+version, target_commitish:sha, draft:true, prerelease:true,
   assets:assets.map(a=>({name:a.name, size:a.size, digest:'sha256:'+a.sha256, state:'uploaded'}))}
 
-test('read-only CLI admits manual numbered RC with explicit build code and refuses automatic and stable release', () => {
-  const invoke = (v,e,c)=>execFileSync(process.execPath,[cli,'admit'], {stdio:'pipe', env:{...process.env,
-    CC_DESK_RELEASE_VERSION:v, GITHUB_EVENT_NAME:e, ANDROID_VERSION_CODE:c}})
-  assert.doesNotThrow(()=>invoke(version,'workflow_dispatch','28004'))
-  for (const args of [[version,'push','4'],['0.28.0','workflow_dispatch','4'],[version,'workflow_dispatch',''],['0.28.0-beta.1','workflow_dispatch','4'],[version,'workflow_dispatch','2100000001'],[version,'workflow_dispatch','028004'],[version,'workflow_dispatch','2.8e4']]) {
-    assert.throws(()=>invoke(...args), /combined mobile release denied/)
+test('manual numbered RC dispatch derives its build code without a form value', () => {
+  const invoke = (v,e)=>execFileSync(process.execPath,[cli,'admit'], {stdio:'pipe', env:{...process.env,
+    CC_DESK_RELEASE_VERSION:v, GITHUB_EVENT_NAME:e, ANDROID_VERSION_CODE:''}}).toString().trim()
+  assert.equal(invoke(version,'workflow_dispatch'),'28004')
+  for (const bad of ['0.28.0','0.28.0-beta.1','0.28.0-rc.3','0.28.00-rc.4','0.28.0-rc.100']) {
+    assert.throws(()=>invoke(bad,'workflow_dispatch'), /combined mobile release denied/)
   }
+  assert.throws(()=>invoke(version,'push'), /combined mobile release denied/)
+  assert.equal(invoke('0.27.3','push'),'')
+})
+test('Android candidate derives a stable and ordered code from checked-out package version', () => {
+  const d = mkdtempSync(join(tmpdir(),'android-code-fixture-'))
+  try {
+    const invoke = (version, attempt) => {
+      writeFileSync(join(d,'package.json'), JSON.stringify({version}))
+      return execFileSync(process.execPath,[cli,'android-version-code'], {
+        cwd:d, stdio:'pipe', env:{...process.env,GITHUB_RUN_ATTEMPT:attempt,ANDROID_VERSION_CODE:'99999'}
+      }).toString().trim()
+    }
+    assert.equal(invoke(version,'1'),'28004')
+    assert.equal(invoke(version,'2'),'28004')
+    assert.equal(invoke('0.28.0-rc.5','1'),'28005')
+    assert.equal(invoke('0.28.0-rc.99','1'),'28099')
+    assert.equal(invoke('0.28.1-rc.1','1'),'28101')
+    assert.throws(()=>invoke('0.28.99999999999999999999-rc.1','1'), /combined mobile release denied/)
+    assert.throws(()=>invoke('0.29.0-rc.1','1'), /combined mobile release denied/)
+  } finally { rmSync(d,{recursive:true,force:true}) }
 })
 test('exact proof fails closed on unsigned/missing security evidence, wrong signer, old SHA or a rerun attempt', () => {
   assert.doesNotThrow(()=>verifyProof(proof,expected))
   for (const bad of [{ nativeSecurityFixtures:null }, { signerCertSha256:'f'.repeat(64) },
-    { sourceSha:'f'.repeat(40) }, { workflowRunAttempt:1 }, { ordinaryCiRunAttempt:'2' }, { apk16KiB:false }, { jniExports:[] }]) {
+    { sourceSha:'f'.repeat(40) }, { versionCode:28005 }, { workflowRunAttempt:1 }, { ordinaryCiRunAttempt:'2' }, { apk16KiB:false }, { jniExports:[] }]) {
     assert.throws(()=>verifyProof({...proof,...bad},expected), /denied/)
   }
 })
@@ -70,13 +90,13 @@ test('release route cannot use the ordinary publication path for a mobile releas
   assert.match(android,/test --locked --manifest-path android-client\/native\/Cargo.toml/)
 })
 
-test('mobile release transports versionCode as text across the manual and reusable workflow boundary', () => {
+test('manual release and candidate workflows require no typed versionCode and preserve the signing gate', () => {
   const release = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8').replace(/\r/g, '')
   const android = readFileSync(new URL('../../.github/workflows/android-production.yml', import.meta.url), 'utf8').replace(/\r/g, '')
-  assert.match(release, /^  workflow_dispatch:\n    inputs:\n      android_version_code:\n(?:        .*\n)*?        type: string$/m)
-  for (const trigger of ['workflow_dispatch', 'workflow_call']) {
-    const input = android.split('  ' + trigger + ':\n')[1].split(/\n  \w|\npermissions:/)[0]
-    assert.match(input, /^      version_code:\n(?:        .*\n)*?        type: string$/m)
-  }
-  assert.match(release, /^      version_code: \$\{\{ inputs\.android_version_code \}\}$/m)
+  assert.doesNotMatch(release, /inputs\.android_version_code|ANDROID_VERSION_CODE:/)
+  assert.doesNotMatch(android, /inputs\.version_code|^    inputs:/m)
+  assert.match(release, /^  workflow_dispatch:\s*$/m)
+  assert.match(android, /^  workflow_dispatch:\s*$/m)
+  assert.match(android, /actions\/checkout@v4[\s\S]+?node scripts\/release-combined-mobile\.mjs android-version-code[\s\S]+?VERSION_CODE=.*GITHUB_ENV/)
+  assert.match(android, /environment: android-production/)
 })

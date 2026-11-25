@@ -8,11 +8,6 @@ on:
     paths:
       - package.json
   workflow_dispatch:
-    inputs:
-      android_version_code:
-        description: Monotonically increasing Android versionCode for a combined mobile RC (required for 0.28 RC)
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -43,10 +38,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/release-build-admission.mjs
-      - name: Require explicit combined mobile RC dispatch and versionCode
+      - name: Require explicit combined mobile RC dispatch and derive the Android versionCode
         env:
           CC_DESK_RELEASE_VERSION: ${{ steps.source.outputs.version }}
-          ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
         run: node scripts/release-combined-mobile.mjs admit
 
   preflight:
@@ -293,8 +287,6 @@ jobs:
     needs: [preflight, build]
     if: needs.preflight.outputs.mobile_release == 'true' && github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/android-production.yml
-    with:
-      version_code: ${{ inputs.android_version_code }}
 
   release:
     needs: [preflight, build, android]
@@ -472,7 +464,6 @@ jobs:
         if: needs.preflight.outputs.mobile_release == 'true'
         env:
           CC_DESK_RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-          ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
           ANDROID_ORDINARY_CI_RUN: ${{ steps.coverage.outputs.ci_run }}
           ANDROID_ORDINARY_CI_ATTEMPT: ${{ steps.coverage.outputs.ci_attempt }}
           ANDROID_TRUSTED_SIGNER: ${{ needs.android.outputs.signer_sha256 }}
