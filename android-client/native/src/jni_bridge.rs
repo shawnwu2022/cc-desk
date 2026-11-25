@@ -259,5 +259,108 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeAndroid
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
-    1
+    2
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeLoadShares(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    facade: jni::objects::JObject<'_>,
+    local_id: jni::objects::JByteArray<'_>,
+    origin: jni::objects::JString<'_>,
+    endpoint: jni::objects::JByteArray<'_>,
+    relay: jni::objects::JByteArray<'_>,
+    approval: jni::objects::JByteArray<'_>,
+) -> jlong {
+    catch_unwind(AssertUnwindSafe(|| {
+        use cc_desk_remote_record::appbind::CanonicalOrigin;
+        if facade.is_null() || origin.is_null() {
+            return None;
+        }
+        let text: String = env.get_string(&origin).ok()?.into();
+        let origin = CanonicalOrigin::trusted(&text).ok()?;
+        if origin.as_str() != text {
+            return None;
+        }
+        let input = crate::android_shares::Inputs {
+            origin,
+            local: exact_bytes(&env, &local_id)?,
+            endpoint: exact_bytes(&env, &endpoint)?,
+            relay: exact_bytes(&env, &relay)?,
+            approval: exact_bytes(&env, &approval)?,
+        };
+        crate::android_shares::begin(
+            env.get_java_vm().ok()?,
+            env.new_global_ref(facade).ok()?,
+            input,
+        )
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeShareState(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jint {
+    catch_unwind(|| crate::android_shares::state(id)).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeShareOffers(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jni::sys::jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let text = crate::android_shares::offers(id)?;
+        Some(env.new_string(text).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or_else(ptr::null_mut)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeChooseShare(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+    offer: jni::objects::JString<'_>,
+) -> jni::sys::jboolean {
+    catch_unwind(AssertUnwindSafe(|| {
+        if offer.is_null() {
+            return None;
+        }
+        let text: String = env.get_string(&offer).ok()?.into();
+        crate::android_shares::choose(id, &text)
+    }))
+    .ok()
+    .flatten()
+    .map_or(0, |_| 1)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeShareObserverHandle(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jlong {
+    catch_unwind(|| crate::android_shares::viewer(id))
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeCancelShares(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) {
+    let _ = catch_unwind(|| crate::android_shares::stop(id));
 }

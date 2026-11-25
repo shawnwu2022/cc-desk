@@ -454,6 +454,36 @@ pub struct AndroidDurableStore<'a, 'local> {
 }
 
 impl<'a, 'local> AndroidDurableStore<'a, 'local> {
+    pub(crate) fn load(&mut self, local_id: [u8; 16]) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+        if local_id == [0; 16] {
+            return None;
+        }
+        let id: String = local_id.iter().map(|x| format!("{x:02x}")).collect();
+        let result = self.env.with_local_frame(8, |env| {
+            let arg = JObject::from(env.new_string(id)?);
+            let raw = env
+                .call_method(
+                    self.facade,
+                    "readPairingRecord",
+                    "(Ljava/lang/String;)[B",
+                    &[JValue::Object(&arg)],
+                )?
+                .l()?;
+            if raw.is_null() {
+                return Ok(None);
+            }
+            let raw = jni::objects::JByteArray::from(raw);
+            if !(1..=9216).contains(&env.get_array_length(&raw)?) {
+                return Ok(None);
+            }
+            Ok::<_, jni::errors::Error>(Some(zeroize::Zeroizing::new(env.convert_byte_array(raw)?)))
+        });
+        if result.is_err() {
+            clear_exception(self.env);
+        }
+        result.ok().flatten()
+    }
+
     pub fn new(env: &'a mut JNIEnv<'local>, facade: &'a JObject<'local>) -> Self {
         Self { env, facade }
     }

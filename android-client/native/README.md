@@ -11,9 +11,12 @@ hardware-sealed no-backup store.
 A persisted receipt can reauthenticate the desktop identity against the current
 three Keystore roles. It cannot reauthorize the original session. Pairing may
 contain no shared session; it must not construct a connection in that case.
-A separate explicit viewing action can consume an exact still-current scope.
-No wildcard, fallback signer, automatic reconnect, keyboard, control, ACK, or
-generic command surface is exposed.
+After reopening a device, request its bounded signed share catalog through
+the authenticated Relay. A user selection retains its exact catalog digest,
+offer ID and fresh nonce; Relay acknowledgement is pending only. The desktop
+must sign readiness for that exact still-current scope before the native
+Viewer can open. No wildcard, fallback signer, automatic reconnect,
+keyboard, control, ACK or generic command surface is exposed.
 
 The Java backend uses the private `NativeDesktopBackend` JNI contract for
 starting and polling a pairing, independently rechecking stored identity,

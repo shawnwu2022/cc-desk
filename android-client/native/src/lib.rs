@@ -17,12 +17,15 @@ use tokio::sync::watch;
 #[cfg(target_os = "android")]
 mod android_pairing;
 #[cfg(target_os = "android")]
+mod android_shares;
+#[cfg(target_os = "android")]
 mod jni_bridge;
 #[cfg(target_os = "android")]
 pub mod keystore;
 
 pub mod enrollment;
 pub mod phone_enrollment;
+pub mod shares;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObserverHandle(i64);

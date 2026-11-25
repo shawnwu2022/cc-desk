@@ -64,6 +64,7 @@ pub struct EnrollmentAttempt {
 /// Keystore signer, rollback-protection mechanism, or bootstrap constructor.
 pub struct VerifiedEnrollment {
     host_endpoint: P256Spki,
+    host_endpoint_spki: [u8; 91],
     phone_grant: P256Spki,
     phone_endpoint_spki: [u8; 91],
     code_sha256: [u8; 32],
@@ -166,7 +167,7 @@ fn nonzero<const N: usize>(value: [u8; N]) -> Result<[u8; N], InvalidEnrollment>
     }
 }
 
-fn lower_hex<const N: usize>(value: &str) -> Result<[u8; N], InvalidEnrollment> {
+pub(crate) fn lower_hex<const N: usize>(value: &str) -> Result<[u8; N], InvalidEnrollment> {
     let digit = |b: u8| match b {
         b'0'..=b'9' => Ok(b - b'0'),
         b'a'..=b'f' => Ok(b - b'a' + 10),
@@ -193,7 +194,7 @@ fn decode64(raw: &str) -> Result<Vec<u8>, InvalidEnrollment> {
     Ok(bytes)
 }
 
-fn read_envelope(outer: &str) -> Result<(Vec<u8>, [u8; 64]), InvalidEnrollment> {
+pub(crate) fn read_envelope(outer: &str) -> Result<(Vec<u8>, [u8; 64]), InvalidEnrollment> {
     let raw = decode64(outer)?;
     let envelope: Envelope = serde_json::from_slice(&raw).map_err(|_| InvalidEnrollment)?;
     let signature = decode64(&envelope.signature_b64)?
@@ -202,14 +203,14 @@ fn read_envelope(outer: &str) -> Result<(Vec<u8>, [u8; 64]), InvalidEnrollment> 
     Ok((decode64(&envelope.payload_b64)?, signature))
 }
 
-fn signed_message(domain: &[u8], payload: &[u8]) -> Vec<u8> {
+pub(crate) fn signed_message(domain: &[u8], payload: &[u8]) -> Vec<u8> {
     let mut msg = Vec::with_capacity(domain.len() + payload.len());
     msg.extend_from_slice(domain);
     msg.extend_from_slice(payload);
     msg
 }
 
-fn verify_signature(
+pub(crate) fn verify_signature(
     public: &[u8; 91],
     msg: &[u8],
     sig: &[u8; 64],
@@ -221,7 +222,7 @@ fn verify_signature(
         .map_err(|_| InvalidEnrollment)
 }
 
-fn nonzero_decimal(raw: &str) -> Result<u64, InvalidEnrollment> {
+pub(crate) fn nonzero_decimal(raw: &str) -> Result<u64, InvalidEnrollment> {
     let number = raw.parse::<u64>().map_err(|_| InvalidEnrollment)?;
     if number == 0 || number.to_string() != raw {
         return Err(InvalidEnrollment);
@@ -320,6 +321,7 @@ pub fn verify_approval(
     };
     Ok(VerifiedEnrollment {
         host_endpoint,
+        host_endpoint_spki: host_spki,
         phone_grant: grant_key,
         phone_endpoint_spki: attempt.phone_endpoint_spki,
         code_sha256: attempt.code_sha256,
@@ -491,6 +493,25 @@ pub fn restore_stored_desktop(
     current_approval: [u8; 91],
     now_unix_ms: u64,
 ) -> Result<[u8; 32], InvalidEnrollment> {
+    restore_membership(
+        bytes,
+        current_origin,
+        current_endpoint,
+        current_relay,
+        current_approval,
+        now_unix_ms,
+    )
+    .map(|membership| membership.host_id())
+}
+
+pub fn restore_membership(
+    bytes: &[u8],
+    current_origin: CanonicalOrigin,
+    current_endpoint: [u8; 91],
+    current_relay: [u8; 91],
+    current_approval: [u8; 91],
+    now_unix_ms: u64,
+) -> Result<RestoredMembership, InvalidEnrollment> {
     if bytes.is_empty() || bytes.len() > 2 * MAX_ENVELOPE_BYTES + 1024 {
         return Err(InvalidEnrollment);
     }
@@ -518,11 +539,57 @@ pub fn restore_stored_desktop(
         phone_endpoint_spki: current_endpoint,
         phone_grant_spki: current_approval,
     };
-    let approved = verify_approval(
+    let mut approved = verify_approval(
         attempt,
         record.phone_attestation,
         record.desktop_approval,
         record.accepted_unix_ms,
     )?;
-    Ok(approved.host_endpoint().endpoint_id(Role::Host))
+    approved.scope = None;
+    Ok(RestoredMembership(approved))
+}
+
+/// Hardware-sealed, reverified membership. Its historical run is discarded.
+pub struct RestoredMembership(VerifiedEnrollment);
+
+impl RestoredMembership {
+    pub fn host_id(&self) -> [u8; 32] {
+        self.0.host_endpoint.endpoint_id(Role::Host)
+    }
+    pub(crate) fn host_spki(&self) -> &[u8; 91] {
+        &self.0.host_endpoint_spki
+    }
+    pub fn origin(&self) -> &CanonicalOrigin {
+        &self.0.origin
+    }
+    pub fn tunnel(&self) -> [u8; 16] {
+        self.0.metadata.tunnel
+    }
+    pub fn relay_id(&self) -> [u8; 16] {
+        self.0.metadata.phone_id
+    }
+    pub fn endpoint_binding(&self) -> [u8; 32] {
+        self.0.metadata.endpoint_binding
+    }
+
+    /// A fresh signed exact scope is the only way restored device membership
+    /// becomes an authorized one-shot Viewer. Never revive the original scope.
+    pub fn authorize_share(
+        mut self,
+        grant: crate::shares::VerifiedShare,
+        now_unix_ms: u64,
+    ) -> Result<DurablyAcceptedEnrollment, InvalidEnrollment> {
+        if self.origin() != &grant.route
+            || self.tunnel() != grant.tunnel
+            || self.endpoint_binding() != grant.endpoint_binding
+            || self.host_spki() != &grant.host_spki
+            || grant.expires_unix_ms <= now_unix_ms
+            || grant.expires_unix_ms - now_unix_ms > 60_000
+        {
+            return Err(InvalidEnrollment);
+        }
+        self.0.scope = Some(grant.scope);
+        self.0.metadata.expires_unix_ms = grant.expires_unix_ms;
+        Ok(DurablyAcceptedEnrollment(self.0))
+    }
 }

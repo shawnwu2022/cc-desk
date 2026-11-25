@@ -108,6 +108,7 @@ dependencies = [
  "cc-desk-remote-protocol",
  "cc-desk-remote-record",
  "futures-util",
+ "ring",
  "rustls",
  "serde",
  "serde_json",
