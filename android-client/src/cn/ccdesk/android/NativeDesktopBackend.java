@@ -32,7 +32,7 @@ final class NativeDesktopBackend implements DesktopBackend {
         try {
             System.loadLibrary("cc_desk_android_native");
             // Calls a real symbol when loading so unsuitable/mismatched libraries cannot activate.
-            if (nativeAndroidAbiVersion() != 1 || nativePairingState(0) != 0) return null;
+            if (nativeAndroidAbiVersion() != 2 || nativePairingState(0) != 0) return null;
             return new NativeDesktopBackend(activity, onChanged);
         } catch (SecurityException | LinkageError ignored) {
             return null;
@@ -135,38 +135,119 @@ final class NativeDesktopBackend implements DesktopBackend {
             Collections.emptyList();
     }
 
-    boolean canObserve(Desktop desktop) {
+    List<Offer> shareOffers(Desktop desktop) {
         Connection c = paired.get(desktop.localId);
-        return verified(desktop) && c.pairing != 0 && c.observer == 0 && !c.consumed.get();
+        return c != null && verified(desktop) && c.state == State.SHARES_READY
+            ? c.offers : Collections.emptyList();
     }
 
-    void startObserver(Desktop desktop) {
+    void loadShares(Desktop desktop, IdentityProvider keys) {
         Connection c = paired.get(desktop.localId);
-        if (!canObserve(desktop) || !c.consumed.compareAndSet(false, true)) return;
+        if (closed.get() || c == null || !verified(desktop)) return;
         executor.execute(() -> {
-            if (closed.get()) return;
+            if (closed.get() || c.share != 0 || c.observer != 0) return;
+            c.state = State.LOADING_SHARES;
+            changed();
             try {
-                c.observer = nativeStartPairedObserver(c.pairing);
-                c.state = c.observer == 0 ? State.UNAVAILABLE : State.AWAITING_OBSERVER;
-                changed();
-                if (c.observer != 0) schedule(() -> pollObserver(c));
-            } catch (RuntimeException | LinkageError denied) { stopObserver(c); }
+                HardwareIdentity endpoint = keys.open(desktop.localId, HardwareIdentity.Usage.ENDPOINT);
+                HardwareIdentity relay = keys.open(desktop.localId, HardwareIdentity.Usage.RELAY);
+                HardwareIdentity approval = keys.open(desktop.localId, HardwareIdentity.Usage.APPROVAL);
+                c.shareFacade = new NativeKeystoreBridge(activity, desktop.localId, endpoint, relay, approval);
+                c.share = nativeLoadShares(c.shareFacade, localId(desktop.localId), desktop.relay.toString(),
+                    endpoint.spki(), relay.spki(), approval.spki());
+                if (c.share == 0 || closed.get()) { stopObserver(c, State.UNAVAILABLE); return; }
+                long owner = c.share;
+                schedule(() -> pollShares(c, owner));
+            } catch (Exception | LinkageError denied) { stopObserver(c, State.UNAVAILABLE); }
         });
     }
 
-    private void pollObserver(Connection c) {
-        if (closed.get() || c.observer == 0) return;
+    void chooseShare(Desktop desktop, Offer offer) {
+        Connection c = paired.get(desktop.localId);
+        if (closed.get() || c == null || !verified(desktop)) return;
+        executor.execute(() -> {
+            if (closed.get() || c.state != State.SHARES_READY || c.share != offer.owner ||
+                !c.offers.contains(offer)) return;
+            try {
+                if (!nativeChooseShare(offer.owner, offer.id)) {
+                    stopObserver(c, State.UNAVAILABLE);
+                    return;
+                }
+                c.offers = Collections.emptyList();
+                c.state = State.AWAITING_OBSERVER;
+                changed();
+            } catch (RuntimeException | LinkageError e) { stopObserver(c, State.UNAVAILABLE); }
+        });
+    }
+
+    private void pollShares(Connection c, long owner) {
+        if (closed.get() || owner == 0 || c.share != owner || c.observer != 0) return;
         try {
-            int state = nativeObserverState(c.observer);
-            if (state == 1) { schedule(() -> pollObserver(c)); return; }
+            switch (nativeShareState(owner)) {
+                case 1:
+                    break;
+                case 2:
+                    if (c.state != State.SHARES_READY) {
+                        c.offers = parseOffers(owner, nativeShareOffers(owner));
+                        c.state = State.SHARES_READY;
+                        changed();
+                    }
+                    break;
+                case 4:
+                    if (c.state != State.AWAITING_OBSERVER) {
+                        c.state = State.AWAITING_OBSERVER;
+                        c.offers = Collections.emptyList();
+                        changed();
+                    }
+                    break;
+                case 5:
+                    c.observer = nativeShareObserverHandle(owner);
+                    if (c.observer == 0) { stopObserver(c, State.UNAVAILABLE); return; }
+                    c.offers = Collections.emptyList();
+                    long observer = c.observer;
+                    schedule(() -> pollObserver(c, observer));
+                    return;
+                default:
+                    stopObserver(c, State.UNAVAILABLE);
+                    return;
+            }
+            schedule(() -> pollShares(c, owner));
+        } catch (Exception | LinkageError e) { stopObserver(c, State.UNAVAILABLE); }
+    }
+
+    private static List<Offer> parseOffers(long owner, String input) throws org.json.JSONException {
+        if (input == null || input.length() > 2048) throw new org.json.JSONException("Invalid share list");
+        org.json.JSONArray items = new org.json.JSONArray(input);
+        if (items.length() > 4) throw new org.json.JSONException("Too many shares");
+        List<Offer> offers = new java.util.ArrayList<>();
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (int i = 0; i < items.length(); i++) {
+            org.json.JSONObject item = items.getJSONObject(i);
+            String id = item.getString("id");
+            String label = item.getString("label");
+            if (item.length() != 2 || !id.matches("[0-9a-f]{32}") || !ids.add(id) ||
+                label.trim().isEmpty() || label.length() > 48 ||
+                label.codePoints().anyMatch(ch -> Character.isISOControl(ch) ||
+                    Character.getType(ch) == Character.FORMAT))
+                throw new org.json.JSONException("Invalid share row");
+            offers.add(new Offer(owner, id, label));
+        }
+        return Collections.unmodifiableList(offers);
+    }
+
+    private void pollObserver(Connection c, long observer) {
+        if (closed.get() || observer == 0 || c.observer != observer) return;
+        try {
+            int state = nativeObserverState(observer);
+            if (state == 1) { schedule(() -> pollObserver(c, observer)); return; }
             if (state != 2) { stopObserver(c); return; }
-            String text = nativeTakeObserverText(c.observer);
+            String text = nativeTakeObserverText(observer);
             if (text != null) c.snapshot = new Session("current-observer", "已批准的会话", text);
             if (c.state != State.OBSERVING || text != null) {
                 c.state = State.OBSERVING;
                 changed();
             }
-            schedule(() -> pollObserver(c));
+            schedule(() -> pollObserver(c, observer));
         } catch (RuntimeException | LinkageError e) { stopObserver(c); }
     }
 
@@ -175,12 +256,27 @@ final class NativeDesktopBackend implements DesktopBackend {
         if (!closed.get() && verified(desktop)) executor.execute(() -> stopObserver(c));
     }
 
-    private void stopObserver(Connection c) {
-        if (c.observer != 0) nativeCancelObserver(c.observer);
+    private void stopObserver(Connection c) { stopObserver(c, State.DISCONNECTED); }
+
+    private void stopObserver(Connection c, State terminal) {
+        long observer = c.observer;
+        long share = c.share;
+        NativeKeystoreBridge facade = c.shareFacade;
         c.observer = 0;
+        c.share = 0;
+        c.shareFacade = null;
         c.snapshot = null;
-        c.state = State.DISCONNECTED;
-        changed();
+        c.offers = Collections.emptyList();
+        c.state = terminal;
+        try {
+            if (observer != 0) nativeCancelObserver(observer);
+        } finally {
+            try { if (share != 0) nativeCancelShares(share); }
+            finally {
+                if (facade != null) facade.close();
+                changed();
+            }
+        }
     }
 
     private void changed() {
@@ -255,7 +351,9 @@ final class NativeDesktopBackend implements DesktopBackend {
         final Desktop desktop;
         final long pairing;
         final NativeKeystoreBridge facade;
-        final AtomicBoolean consumed = new AtomicBoolean();
+        long share;
+        NativeKeystoreBridge shareFacade;
+        volatile List<Offer> offers = Collections.emptyList();
         volatile long observer;
         volatile State state = State.DISCONNECTED;
         volatile Session snapshot;
@@ -270,9 +368,15 @@ final class NativeDesktopBackend implements DesktopBackend {
     static native int nativePairingState(long handle);
     static native String nativePairingHostId(long handle);
     static native void nativeCancelPairing(long handle);
-    static native long nativeStartPairedObserver(long handle);
     static native String nativeReadPairedHostId(NativeKeystoreBridge facade, byte[] localId,
         String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki);
+    static native long nativeLoadShares(NativeKeystoreBridge facade, byte[] localId,
+        String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki);
+    static native int nativeShareState(long handle);
+    static native String nativeShareOffers(long handle);
+    static native boolean nativeChooseShare(long handle, String offer);
+    static native long nativeShareObserverHandle(long handle);
+    static native void nativeCancelShares(long handle);
     static native int nativeObserverState(long handle);
     static native String nativeTakeObserverText(long handle);
     static native void nativeCancelObserver(long handle);

@@ -6,7 +6,7 @@ import java.util.UUID;
 
 /** Internal app contract. No DTO in this file is a wire format or authorization token. */
 interface DesktopBackend {
-    enum State { DISCONNECTED, WAITING_FOR_DESKTOP, AWAITING_OBSERVER, OBSERVING, REVOKED, UNAVAILABLE }
+    enum State { DISCONNECTED, WAITING_FOR_DESKTOP, LOADING_SHARES, SHARES_READY, AWAITING_OBSERVER, OBSERVING, REVOKED, UNAVAILABLE }
 
     interface IdentityProvider {
         HardwareIdentity open(UUID localId, HardwareIdentity.Usage usage) throws Exception;
@@ -41,6 +41,15 @@ interface DesktopBackend {
                 text.contains("%") || !relay.normalize().equals(relay))
                 throw new IllegalArgumentException("Expected WSS URL without credentials");
             return relay;
+        }
+    }
+
+    final class Offer {
+        final long owner;
+        final String id;
+        final String label;
+        Offer(long owner, String id, String label) {
+            this.owner = owner; this.id = id; this.label = label;
         }
     }
 

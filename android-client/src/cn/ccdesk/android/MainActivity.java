@@ -87,6 +87,11 @@ public final class MainActivity extends Activity {
                 button(row.name + " · " + row.hostId.substring(0, 8),
                     () -> select(row.localId));
             }
+            if (selected == null && backend != null && !rows.isEmpty()) {
+                button("读取各电脑的共享会话", () -> {
+                    for (DesktopBackend.Desktop row : rows) backend.loadShares(row, identities);
+                });
+            }
             TextView heading = text(selected == null ? "全部会话" : "桌面会话", 22);
             for (DesktopBackend.Desktop row : rows) {
                 if (selected != null && !selected.equals(row.localId)) continue;
@@ -122,10 +127,24 @@ public final class MainActivity extends Activity {
         DesktopBackend.State state = backend == null ? DesktopBackend.State.UNAVAILABLE : backend.state(desktop);
         String source = desktop.name + " · " + desktop.hostId.substring(0, 8);
         text(source + " · " + label(state), 18);
-        if (backend != null && backend.canObserve(desktop))
-            button("查看已批准的会话", () -> backend.startObserver(desktop));
-        if (state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.AWAITING_OBSERVER)
-            button("停止查看", () -> backend.disconnectObserver(desktop));
+        if (backend != null && (state == DesktopBackend.State.DISCONNECTED ||
+            state == DesktopBackend.State.UNAVAILABLE)) {
+            button("查看可用会话",
+                () -> backend.loadShares(desktop, identities));
+        }
+        if (state == DesktopBackend.State.SHARES_READY) {
+            List<DesktopBackend.Offer> offers = backend.shareOffers(desktop);
+            button("关闭会话列表", () -> backend.disconnectObserver(desktop));
+            if (offers.isEmpty()) text("电脑没有共享会话，请在电脑上开启共享。", 15);
+            for (DesktopBackend.Offer offer : offers) {
+                button(offer.label + " · " + source, () -> backend.chooseShare(desktop, offer));
+            }
+        }
+        if (state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.AWAITING_OBSERVER ||
+            state == DesktopBackend.State.LOADING_SHARES) {
+            button(state == DesktopBackend.State.OBSERVING ? "停止查看" : "取消", () ->
+                backend.disconnectObserver(desktop));
+        }
         if (state != DesktopBackend.State.OBSERVING) return;
         for (DesktopBackend.Session session : backend.observerSessions(desktop)) {
             // 来源始终与行绑定，不按照会话 ID 跨主机合并。
@@ -266,7 +285,9 @@ public final class MainActivity extends Activity {
     private String label(DesktopBackend.State state) {
         switch (state) {
             case WAITING_FOR_DESKTOP: return "请在电脑上点同意";
-            case AWAITING_OBSERVER: return "正在连接，按提示确认";
+            case LOADING_SHARES: return "正在读取共享会话";
+            case SHARES_READY: return "共享会话";
+            case AWAITING_OBSERVER: return "请在电脑上点同意，并按手机提示确认";
             case OBSERVING: return "正在观察";
             case DISCONNECTED: return "未连接";
             case REVOKED: return "已撤销";

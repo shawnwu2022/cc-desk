@@ -109,3 +109,16 @@ and version, live in the app no-backup directory, and commit only after a synced
 atomic write and ciphertext readback. No UI metadata grants native authority.
 Readback returns decrypted opaque bytes solely for native re-verification, never
 marks a profile active. Java requires the exact Rust pairing and observer ABI version, not library load alone. Pair approval requires native verification and durable receipt before publishing UI metadata. Existing metadata is not visible until a native rescan re-verifies the matching receipt and hardware public keys; prior active observation is never reopened automatically.
+
+## Share catalog ABI 2
+
+The integrated app requires native ABI 2. Each verified paired desktop owns its
+own native share-list/request handle and hardware signer facade. Users can read
+a single computer or request the available lists in All Sessions. The native
+runtime currently limits concurrent share owners to four; a rejected or offline
+desktop does not prevent rendering the others. The app displays only bounded
+native-verified offers and keeps each offer under its original desktop and handle.
+Selecting one requests that exact share and waits for desktop readiness and
+native presence approval before showing plain authenticated Observer text.
+Cancel retires the matching native share and view and clears transient data;
+restoring paired metadata does not restore any expired view or grant.
