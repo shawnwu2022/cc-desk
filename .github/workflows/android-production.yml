@@ -2,17 +2,7 @@ name: Android production candidate
 
 on:
   workflow_dispatch:
-    inputs:
-      version_code:
-        description: Monotonically increasing Android versionCode for this exact release
-        required: true
-        type: string
-
   workflow_call:
-    inputs:
-      version_code:
-        required: true
-        type: string
     outputs:
       artifact_id:
         value: ${{ jobs.android.outputs.artifact_id }}
@@ -37,8 +27,6 @@ jobs:
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       signer_sha256: ${{ steps.sign.outputs.signer_sha256 }}
-    env:
-      VERSION_CODE: ${{ inputs.version_code }}
 
     steps:
       - name: Admit exact protected main and its ordinary push CI
@@ -47,9 +35,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:VERSION_CODE -cnotmatch '\A[1-9][0-9]{0,9}\z' -or [long]$env:VERSION_CODE -gt 2100000000) {
-            throw 'Android versionCode must be a canonical positive integer no greater than 2100000000'
-          }
           function Request([string]$endpoint) {
             $raw = gh api $endpoint
             if ($LASTEXITCODE -ne 0) { throw 'Android source admission API request failed' }
@@ -77,9 +62,6 @@ jobs:
           foreach ($name in @('Frontend checks','Rust checks','Disposable roundtrip compile-only policy (no native acceptance)')) {
             if (@($execution.jobs | Where-Object name -CEQ $name).Count -ne 1) { throw "Required CI job unavailable: $name" }
           }
-          if ($env:VERSION_CODE -cnotmatch '^[1-9][0-9]{0,9}$' -or [long]$env:VERSION_CODE -gt 2100000000) {
-            throw 'Android versionCode out of permitted range'
-          }
           "ANDROID_ADMITTED_CI_RUN=$($ci.id)" >> $env:GITHUB_ENV
           "ANDROID_ADMITTED_CI_ATTEMPT=$($ci.run_attempt)" >> $env:GITHUB_ENV
 
@@ -87,6 +69,20 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Derive the Android versionCode from the exact release source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $code = node scripts/release-combined-mobile.mjs android-version-code
+          if ($LASTEXITCODE -ne 0 -or $code -cnotmatch '\A[1-9][0-9]{0,9}\z' -or [long]$code -gt 2100000000) {
+            throw 'Could not derive a valid Android versionCode from the release source'
+          }
+          "VERSION_CODE=$code" >> $env:GITHUB_ENV
+          Write-Host "Android versionCode: $code"
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@1.100.0

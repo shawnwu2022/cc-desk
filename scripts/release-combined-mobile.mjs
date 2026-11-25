@@ -10,8 +10,10 @@ const PROGRAM = /^[a-f0-9]{40}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const COUNT = 13
 const CONTROLLER_ABI = ['nativeViewerRole','nativeTakeControllerFrame','nativeConfirmControllerFrame','nativeQueueControllerText','nativeQueueControllerKey','nativeControllerInputOutcome']
-const MOBILE_RC = /^0\.28\.(?:0|[1-9]\d*)-rc\.[1-9]\d*$/
-const INTEGER = /^[1-9]\d{0,9}$/
+const MOBILE_RC = /^0\.28\.(0|[1-9]\d{0,7})-rc\.([1-9]\d?)$/
+const ANDROID_RC_BASE = 28000
+const FIRST_ANDROID_RC_CODE = 28004
+const MAX_ANDROID_CODE = 2100000000
 const assert = (ok, msg) => { if (!ok) throw new Error('combined mobile release denied: ' + msg) }
 const plain = file => { const s = lstatSync(file); assert(s.isFile() && !s.isSymbolicLink() && s.size > 0, 'expected bounded regular file'); return s.size }
 const boundedJson = (file, max = 64 * 1024) => { assert(plain(file) <= max, 'JSON file is too large'); return JSON.parse(readFileSync(file, 'utf8')) }
@@ -22,9 +24,17 @@ const digestFile = file => new Promise((resolve, reject) => {
   stream.on('data', data => hash.update(data))
   stream.on('end', () => resolve(hash.digest('hex')))
 })
-export function admitMobileDispatch(version, event, versionCode) {
-  assert(MOBILE_RC.test(version ?? '') && event === 'workflow_dispatch', 'mobile only supports a manually selected numbered 0.28 RC')
-  assert(INTEGER.test(versionCode ?? '') && Number(versionCode) <= 2100000000, 'explicit monotonic Android versionCode is required')
+function androidVersionCode(version) {
+  const parts = typeof version === 'string' && MOBILE_RC.exec(version)
+  assert(parts && parts[0] === version, 'Android versionCode requires a numbered 0.28 RC with rc.1 through rc.99')
+  // Two digits reserved for the RC, so the next patch cannot collide with the previous one.
+  const code = ANDROID_RC_BASE + Number(parts[1]) * 100 + Number(parts[2])
+  assert(code >= FIRST_ANDROID_RC_CODE && code <= MAX_ANDROID_CODE, 'Android versionCode outside the reserved release range')
+  return String(code)
+}
+function admitMobileDispatch(version, event) {
+  assert(event === 'workflow_dispatch', 'mobile only supports a manually selected numbered 0.28 RC')
+  return androidVersionCode(version)
 }
 export function verifyProof(proof, expected) {
   assert(PROGRAM.test(expected.sha ?? '') && SHA256.test(expected.signer ?? '') && !/^0+$/.test(expected.signer), 'trusted source/signer identities missing')
@@ -73,11 +83,10 @@ export function verifyHostedAssets(release, expected, draft = true) {
 function getExpected() {
   const expected = {
     sha: process.env.GITHUB_SHA, version: process.env.CC_DESK_RELEASE_VERSION,
-    versionCode: process.env.ANDROID_VERSION_CODE, run: process.env.GITHUB_RUN_ID,
+    versionCode: admitMobileDispatch(process.env.CC_DESK_RELEASE_VERSION, process.env.GITHUB_EVENT_NAME), run: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT, ciRun: process.env.ANDROID_ORDINARY_CI_RUN,
     ciAttempt: process.env.ANDROID_ORDINARY_CI_ATTEMPT, signer: process.env.ANDROID_TRUSTED_SIGNER
   }
-  admitMobileDispatch(expected.version, process.env.GITHUB_EVENT_NAME, expected.versionCode)
   return expected
 }
 async function prepare() {
@@ -112,7 +121,15 @@ async function prepare() {
 async function main() {
   const [mode, arg, extra] = process.argv.slice(2)
   assert(!extra, 'invalid command arguments')
-  if (mode === 'admit') { const {CC_DESK_RELEASE_VERSION: version, GITHUB_EVENT_NAME: event, ANDROID_VERSION_CODE: code} = process.env; if (version?.startsWith('0.28.')) admitMobileDispatch(version,event,code); return }
+  if (mode === 'admit') {
+    const {CC_DESK_RELEASE_VERSION: version, GITHUB_EVENT_NAME: event} = process.env
+    if (version?.startsWith('0.28.')) console.log(admitMobileDispatch(version, event))
+    return
+  }
+  if (mode === 'android-version-code') {
+    console.log(androidVersionCode(boundedJson('package.json').version))
+    return
+  }
   if (mode === 'artifact-id') { assert(/^[1-9][0-9]{0,19}$/.test(process.env.ANDROID_ARTIFACT_ID ?? ''), 'missing same-run Android artifact ID'); return }
   if (mode === 'prepare') { await prepare(); return }
   if (mode === 'verify-draft' || mode === 'verify-published') {
