@@ -100,8 +100,9 @@ if ($Phase -ceq 'Build') {
     $methods = @([regex]::Matches($javaSource, '\bnative\s+[A-Za-z0-9_.]+(?:\[\])?\s+(native[A-Za-z0-9]+)\s*\(') |
         ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
     $requiredMethods = @('nativeAndroidAbiVersion','nativeBeginPairing','nativePairingState','nativePairingHostId','nativeCancelPairing',
-        'nativeStartPairedObserver','nativeReadPairedHostId','nativeObserverState','nativeCancelObserver','nativeTakeObserverText')
-    Require (@($requiredMethods | Where-Object { $_ -cnotin $methods }).Count -eq 0) 'Incomplete integrated Java pairing/Observer JNI surface'
+        'nativeReadPairedHostId','nativeObserverState','nativeCancelObserver','nativeTakeObserverText',
+        'nativeLoadShares','nativeShareState','nativeShareOffers','nativeChooseShare','nativeShareObserverHandle','nativeCancelShares')
+    Require (@($requiredMethods | Where-Object { $_ -cnotin $methods }).Count -eq 0) 'Incomplete integrated Java pairing, share selection or Observer JNI surface'
 
     $manifest = [xml](Get-Content -LiteralPath "$root/AndroidManifest.xml" -Raw)
     Require ($manifest.DocumentElement.GetAttribute('package') -ceq $package) 'Android package ID changed'
