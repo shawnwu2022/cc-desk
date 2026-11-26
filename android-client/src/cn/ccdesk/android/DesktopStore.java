@@ -25,7 +25,11 @@ final class DesktopStore {
         file = new AtomicFile(new File(context.getNoBackupFilesDir(), "approved-desktops-v1.json"));
     }
 
-    synchronized List<DesktopBackend.Desktop> read() throws IOException {
+    List<DesktopBackend.Desktop> read() throws IOException {
+        synchronized (DesktopStore.class) { return readLocked(); }
+    }
+
+    private List<DesktopBackend.Desktop> readLocked() throws IOException {
         try {
             if (file.getBaseFile().length() > 65536) throw new IOException("Desktop index too large");
             byte[] bytes = file.readFully();
@@ -54,14 +58,45 @@ final class DesktopStore {
         }
     }
 
-    synchronized void addApproved(DesktopBackend.Desktop desktop) throws IOException {
-        List<DesktopBackend.Desktop> existing = read();
-        if (existing.size() >= LIMIT) throw new IOException("Desktop index full");
+    void addApproved(DesktopBackend.Desktop desktop) throws IOException {
+        synchronized (DesktopStore.class) { addApprovedLocked(desktop); }
+    }
+
+    private void addApprovedLocked(DesktopBackend.Desktop desktop) throws IOException {
+        List<DesktopBackend.Desktop> existing = readLocked();
         for (DesktopBackend.Desktop row : existing) {
+            if (row.localId.equals(desktop.localId) && row.hostId.equals(desktop.hostId)
+                && row.relay.equals(desktop.relay)) return;
             if (row.hostId.equals(desktop.hostId) || row.localId.equals(desktop.localId))
                 throw new IOException("Desktop already indexed; re-authorization required");
         }
+        if (existing.size() >= LIMIT) throw new IOException("Desktop index full");
         existing.add(desktop);
+        write(existing);
+    }
+
+    void renameAlias(DesktopBackend.Desktop expected, String alias) throws IOException {
+        synchronized (DesktopStore.class) { renameAliasLocked(expected, alias); }
+    }
+
+    private void renameAliasLocked(DesktopBackend.Desktop expected, String alias) throws IOException {
+        List<DesktopBackend.Desktop> existing = readLocked();
+        for (int i = 0; i < existing.size(); i++) {
+            DesktopBackend.Desktop row = existing.get(i);
+            if (row.localId.equals(expected.localId) && row.hostId.equals(expected.hostId)
+                && row.relay.equals(expected.relay)) {
+                DesktopBackend.Desktop renamed = row.withAlias(alias);
+                if (!renamed.name.equals(row.name)) {
+                    existing.set(i, renamed);
+                    write(existing);
+                }
+                return;
+            }
+        }
+        throw new IOException("Desktop index changed");
+    }
+
+    private void write(List<DesktopBackend.Desktop> existing) throws IOException {
         JSONArray array = new JSONArray();
         try {
             for (DesktopBackend.Desktop row : existing) {
@@ -71,13 +106,18 @@ final class DesktopStore {
             }
         } catch (JSONException e) { throw new IOException("Could not serialize desktop index", e); }
 
+        byte[] bytes = array.toString().getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > 65536) throw new IOException("Desktop index too large");
         FileOutputStream stream = file.startWrite();
         try {
-            stream.write(array.toString().getBytes(StandardCharsets.UTF_8));
+            stream.write(bytes);
+            stream.getFD().sync();
             file.finishWrite(stream);
         } catch (IOException | RuntimeException e) {
             file.failWrite(stream);
             throw e;
         }
+        if (!java.util.Arrays.equals(bytes, file.readFully()))
+            throw new IOException("Desktop index save unconfirmed");
     }
 }

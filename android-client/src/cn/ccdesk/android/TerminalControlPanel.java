@@ -1,10 +1,15 @@
 package cn.ccdesk.android;
 
 import android.content.Context;
+import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.text.InputFilter;
 import android.text.InputType;
+import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.ViewTreeObserver;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
@@ -30,9 +35,17 @@ final class TerminalControlPanel extends LinearLayout {
     private final TextView feedback;
     private final EditText draft;
     private final Button send;
+    private final Button jumpToLatest;
     private final LinearLayout keys;
+    private final HorizontalScrollView controls;
+    private final Button toggleKeys;
+    private final TerminalKeyShelfState keyShelf = new TerminalKeyShelfState();
+    private final TerminalViewportState viewport = new TerminalViewportState();
+    private ViewTreeObserver.OnPreDrawListener pendingLayout;
+    private boolean applyingScroll;
     private boolean active;
     private boolean pending;
+    private boolean pendingText;
     private boolean uncertain;
     private boolean closed;
     private long sequence;
@@ -41,16 +54,22 @@ final class TerminalControlPanel extends LinearLayout {
         super(context);
         this.actions = actions;
         setOrientation(VERTICAL);
-        int padding = (int)(12 * getResources().getDisplayMetrics().density);
+        int padding = dp(12);
         setPadding(padding, padding, padding, padding);
+        LinearLayout appBar = new LinearLayout(context);
+        appBar.setGravity(Gravity.CENTER_VERTICAL);
         TextView header = new TextView(context);
-        header.setText("远程控制 · " + source);
-        header.setTextSize(20);
-        addView(header);
+        header.setText("远程控制\n" + source);
+        header.setTextSize(18);
+        header.setMaxLines(3);
+        header.setEllipsize(TextUtils.TruncateAt.END);
+        header.setAccessibilityHeading(true);
+        appBar.addView(header, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1));
         Button stop = new Button(context);
         stop.setText("停止控制");
         stop.setOnClickListener(unused -> leave());
-        addView(stop);
+        appBar.addView(stop);
+        addView(appBar);
 
         console = new ScrollView(context);
         console.setFillViewport(true);
@@ -64,10 +83,26 @@ final class TerminalControlPanel extends LinearLayout {
         console.addView(horizontal);
         addView(console, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1));
 
+        LinearLayout statusBar = new LinearLayout(context);
+        statusBar.setGravity(Gravity.CENTER_VERTICAL);
+        jumpToLatest = new Button(context);
+        jumpToLatest.setText("最新输出");
+        jumpToLatest.setOnClickListener(unused -> scheduleScroll(viewport.returnToLatest()));
+        jumpToLatest.setEnabled(false);
+        console.setOnScrollChangeListener((view, x, y, oldX, oldY) -> {
+            if (!applyingScroll && y != oldY) viewport.scrolled(!console.canScrollVertically(1));
+            updateLatestAction();
+        });
+        console.addOnLayoutChangeListener((view, l, t, r, b, oldL, oldT, oldR, oldB) -> {
+            if (!closed && b - t != oldB - oldT) scheduleScroll(viewport.nextLayout());
+        });
+
         feedback = new TextView(context);
         feedback.setText("等候电脑批准和手机确认");
         feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        addView(feedback);
+        statusBar.addView(feedback, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1));
+        statusBar.addView(jumpToLatest);
+        addView(statusBar, 1);
 
         draft = new EditText(context);
         draft.setHint("输入或粘贴单行文字，点发送；换行用回车键");
@@ -80,6 +115,13 @@ final class TerminalControlPanel extends LinearLayout {
         addView(draft);
 
         send = new Button(context);
+        draft.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence text, int start, int before, int count) {
+                updateEnabled();
+            }
+            @Override public void afterTextChanged(android.text.Editable text) {}
+        });
         send.setText("发送文字");
         send.setOnClickListener(unused -> {
             String captured = draft.getText().toString();
@@ -94,32 +136,122 @@ final class TerminalControlPanel extends LinearLayout {
             }
             request(true, (completion) -> actions.send(captured, completion));
         });
-        addView(send);
+        LinearLayout inputActions = new LinearLayout(context);
+        inputActions.setGravity(Gravity.CENTER_VERTICAL);
+        inputActions.addView(send, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1));
+        toggleKeys = new Button(context);
+        toggleKeys.setOnClickListener(unused -> {
+            keyShelf.toggle();
+            layoutKeyShelf();
+        });
+        inputActions.addView(toggleKeys);
+        addView(inputActions);
 
-        HorizontalScrollView controls = new HorizontalScrollView(context);
+        controls = new HorizontalScrollView(context);
+        controls.setFillViewport(false);
+        controls.setHorizontalScrollBarEnabled(true);
+        controls.setScrollbarFadingEnabled(false);
         keys = new LinearLayout(context);
-        for (Key key : supported) {
+        Key[] order = {Key.LEFT, Key.DOWN, Key.UP, Key.RIGHT, Key.TAB,
+            Key.ESCAPE, Key.CTRL_C, Key.BACKSPACE, Key.ENTER};
+        for (Key key : order) {
+            if (!supported.contains(key)) continue;
             Button action = new Button(context);
             action.setText(keyLabel(key));
+            action.setAllCaps(false);
+            action.setContentDescription(keyDescription(key));
+            action.setMinWidth(dp(48));
+            action.setMinimumWidth(dp(48));
+            action.setMinHeight(dp(48));
+            action.setMinimumHeight(dp(48));
+            action.setPadding(dp(6), 0, dp(6), 0);
             action.setOnClickListener(unused -> request(false, (completion) -> actions.key(key, completion)));
             keys.addView(action);
         }
         controls.addView(keys);
         addView(controls);
+        toggleKeys.setVisibility(supported.isEmpty() ? GONE : VISIBLE);
+        layoutKeyShelf();
+        setOnApplyWindowInsetsListener((view, insets) -> {
+            Insets safe = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsets.Type.ime());
+            setPadding(padding + safe.left, padding + safe.top, padding + safe.right,
+                padding + Math.max(safe.bottom, ime.bottom));
+            keyShelf.updateIme(insets.isVisible(WindowInsets.Type.ime()));
+            layoutKeyShelf();
+            return WindowInsets.CONSUMED;
+        });
         updateEnabled();
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void layoutKeyShelf() {
+        boolean visible = !closed && keys.getChildCount() != 0 && keyShelf.isVisible();
+        int visibility = visible ? VISIBLE : GONE;
+        if (controls.getVisibility() != visibility) controls.setVisibility(visibility);
+        String title = visible ? "隐藏快捷键" : "终端快捷键";
+        if (!title.contentEquals(toggleKeys.getText())) toggleKeys.setText(title);
+        toggleKeys.setSelected(visible);
+    }
+
+    private static String keyDescription(Key key) {
+        switch (key) {
+            case LEFT: return "向左方向键";
+            case RIGHT: return "向右方向键";
+            case UP: return "向上方向键";
+            case DOWN: return "向下方向键";
+            default: return keyLabel(key);
+        }
     }
 
     void update(String text, boolean canSend, String status) {
         if (closed) return;
-        boolean bottom = !console.canScrollVertically(1);
         if (!output.getText().toString().equals(text)) {
             output.setText(text);
-            if (bottom) console.post(() -> console.fullScroll(View.FOCUS_DOWN));
+            scheduleScroll(viewport.nextLayout());
         }
-        if (!uncertain && !pending && (active != canSend || !canSend)) feedback.setText(status);
+        if (!uncertain && !pending && (active != canSend || !canSend)
+            && !status.contentEquals(feedback.getText())) feedback.setText(status);
         active = canSend && !uncertain;
         updateEnabled();
     }
+
+    private void scheduleScroll(long exactLayout) {
+        removePendingLayout();
+        pendingLayout = () -> {
+            removePendingLayout();
+            if (viewport.follow(exactLayout) && console.getChildCount() != 0) {
+                int extent = Math.max(0,
+                    console.getHeight() - console.getPaddingTop() - console.getPaddingBottom());
+                applyingScroll = true;
+                try {
+                    console.scrollTo(console.getScrollX(),
+                        Math.max(0, console.getChildAt(0).getHeight() - extent));
+                } finally {
+                    applyingScroll = false;
+                }
+            }
+            updateLatestAction();
+            return true;
+        };
+        console.getViewTreeObserver().addOnPreDrawListener(pendingLayout);
+        console.invalidate();
+    }
+
+    private void removePendingLayout() {
+        ViewTreeObserver tree = console.getViewTreeObserver();
+        if (pendingLayout != null && tree.isAlive()) tree.removeOnPreDrawListener(pendingLayout);
+        pendingLayout = null;
+    }
+
+    private void updateLatestAction() {
+        jumpToLatest.setEnabled(!closed && console.canScrollVertically(1));
+    }
+
+    boolean hasUnconfirmedInput() { return pending || uncertain; }
 
     void leave() {
         if (closed) return;
@@ -130,11 +262,15 @@ final class TerminalControlPanel extends LinearLayout {
     void closeLocally() {
         if (closed) return;
         closed = true;
+        viewport.close();
+        removePendingLayout();
         sequence++;
         active = false;
         pending = false;
         output.setText("");
+        jumpToLatest.setEnabled(false);
         draft.getText().clear();
+        layoutKeyShelf();
         updateEnabled();
     }
 
@@ -143,6 +279,7 @@ final class TerminalControlPanel extends LinearLayout {
     private void request(boolean text, Operation operation) {
         if (!active || pending || closed) return;
         long original = ++sequence;
+        pendingText = text;
         pending = true;
         feedback.setText("正在发送…");
         updateEnabled();
@@ -170,8 +307,10 @@ final class TerminalControlPanel extends LinearLayout {
 
     private void updateEnabled() {
         boolean enabled = active && !pending && !closed;
-        draft.setEnabled(enabled);
-        send.setEnabled(enabled);
+        // 远程按键等待回执时，不中断本地输入法的候选词编辑。
+        draft.setEnabled(!closed && !uncertain && !(pending && pendingText));
+        send.setEnabled(enabled && draft.length() != 0);
+        toggleKeys.setEnabled(!closed);
         for (int i = 0; i < keys.getChildCount(); i++) keys.getChildAt(i).setEnabled(enabled);
     }
 

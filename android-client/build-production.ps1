@@ -69,8 +69,15 @@ function AssertApk([string]$apk, [string]$expectedSoSha) {
         try { $actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() }
         finally { $stream.Dispose() }
         Require ($actual -ceq $expectedSoSha) 'Packaged library differs from the checked ELF'
+        $icon = @($zip.Entries | Where-Object FullName -CEQ 'res/drawable-nodpi-v4/ccdesk_desktop_art.png')
+        Require ($icon.Count -eq 1) 'Missing exact desktop launcher artwork'
+        $pixels = $icon[0].Open()
+        try { $iconSha = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($pixels)).ToLowerInvariant() }
+        finally { $pixels.Dispose() }
+        Require ($iconSha -ceq (Hash "$repo/src-tauri/icons/source/png/ccdesk-256.png")) 'APK launcher artwork differs from approved desktop source'
     } finally { $zip.Dispose() }
     $badging = @(Run $aapt @('dump','badging',$apk))
+    Require (@($badging | Where-Object { $_ -cmatch "^application-icon-160:'res/mipmap-anydpi-v26/ccdesk_launcher\.xml'$" }).Count -eq 1) 'Manifest launcher icon does not resolve'
     $versionLine = "^package: name='$([regex]::Escape($package))' versionCode='$VersionCode' versionName='$([regex]::Escape($version))'"
     Require (@($badging | Where-Object { $_ -cmatch $versionLine }).Count -eq 1) 'APK identity or exact release version not as admitted'
     Require (@($badging | Where-Object { $_ -cmatch "^uses-permission: name='android\.permission\.INTERNET'$" }).Count -eq 1) 'APK lacks Internet permission'
@@ -162,7 +169,8 @@ if ($Phase -ceq 'Build') {
     Run "$Jdk/bin/javac.exe" (@('-encoding','UTF-8','--release','8','-Xlint:-options','-classpath',"$platform;$ZxingCore",'-d',"$WorkDirectory/classes") + $sources)
     Run "$Jdk/bin/jar.exe" @('cf',"$WorkDirectory/classes.jar",'-C',"$WorkDirectory/classes",'.')
     Run "$bt/d8.bat" @('--release','--min-api','31','--lib',$platform,'--output',"$WorkDirectory/dex","$WorkDirectory/classes.jar",$ZxingCore)
-    Run $aapt @('package','-f','-M',$manifestFile,'-I',$platform,'-A',"$root/assets",'-F',$unaligned)
+    $iconResources = & "$root/prepare-icon-resources.ps1" -WorkDirectory $WorkDirectory
+    Run $aapt @('package','-f','--no-crunch','-M',$manifestFile,'-I',$platform,'-S',$iconResources,'-A',"$root/assets",'-F',$unaligned)
     Run "$Jdk/bin/jar.exe" @('--update','--no-compress','--no-manifest','--file',$unaligned,'-C',"$WorkDirectory/dex",'classes.dex','-C',$WorkDirectory,'lib')
     Run $align @('-P','16','-f','4',$unaligned,$aligned)
     AssertApk $aligned $soSha

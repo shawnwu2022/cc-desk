@@ -32,6 +32,11 @@ interface DesktopBackend {
             this.relay = checkedRelay(relay.toString());
         }
 
+        Desktop withAlias(String alias) {
+            if (alias == null) throw new IllegalArgumentException("Missing desktop alias");
+            return new Desktop(localId, hostId, alias.trim(), relay);
+        }
+
         static URI checkedRelay(String text) {
             URI relay = URI.create(text);
             if (!"wss".equals(relay.getScheme()) || relay.getHost() == null ||

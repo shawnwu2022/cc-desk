@@ -873,9 +873,20 @@ impl NativeRuntime {
         headers: &HeaderMap,
         body: &InvokeBody,
     ) -> Result<HostDocumentAdmission<T>, SafeError> {
+        self.admit_host_document_with_limit(webview, headers, body, 1024)
+    }
+
+    #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_host_document_with_limit<T: serde::de::DeserializeOwned, R: Runtime>(
+        &self,
+        webview: &Webview<R>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+        limit: usize,
+    ) -> Result<HostDocumentAdmission<T>, SafeError> {
         let binding = self.binding()?;
         let caller = binding.admit_native(webview, headers)?;
-        let input = decode_projection(body, 1024)?;
+        let input = decode_projection(body, limit)?;
         binding.check_admitted(&caller)?;
         Ok((binding, caller, input))
     }

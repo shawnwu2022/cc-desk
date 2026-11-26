@@ -108,7 +108,7 @@ is AES-256-GCM in AndroidKeyStore; records have fresh IVs, enrollment-bound AAD
 and version, live in the app no-backup directory, and commit only after a synced
 atomic write and ciphertext readback. No UI metadata grants native authority.
 Readback returns decrypted opaque bytes solely for native re-verification, never
-marks a profile active. Java requires the exact Rust pairing and observer ABI version, not library load alone. Pair approval requires native verification and durable receipt before publishing UI metadata. Existing metadata is not visible until a native rescan re-verifies the matching receipt and hardware public keys; prior active observation is never reopened automatically.
+marks a profile active. Java requires the exact Rust pairing and observer ABI version, not library load alone. Pair approval requires native verification and durable receipt before publishing UI metadata. Saved desktop metadata can be displayed offline, but remains non-actionable until a native rescan re-verifies the matching sealed receipt and original hardware public keys. Before submitting an invite, Android records only its local enrollment ID, relay endpoint, and desktop commitment in no-backup storage. If a verified sealed receipt survives a crash before index publication, the next launch can rebuild its row locally; the hint alone never grants access and no invite secret or network request is replayed. Prior active observation is never reopened automatically.
 
 ## Share catalog ABI 2
 
@@ -136,5 +136,9 @@ separate. Android BiometricPrompt identifies the exact verified role and whether
 that approval lets the mobile device send input. A host-written receipt is
 distinct from rejection or uncertain outcome. The app does not replay unknown
 input; it suppresses further sending until the operator leaves the view.
-Stopping, navigating back or backgrounding the control screen clears the
+Within one exact control handle, the draft is local and incoming output
+does not jump away from older text being read. "最新输出" resumes following
+after layout. Stopping, navigating back or backgrounding clears the old
 projection/draft locally and cancels its exact native controller handle.
+If the handle ends unexpectedly, the app does not resend input; it may offer
+an explicit action to read available shares again for that verified computer.
