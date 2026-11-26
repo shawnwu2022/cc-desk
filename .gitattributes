@@ -34,3 +34,6 @@ src-tauri/icons/source/** -text
 
 # Keep this operator document out of public source archives.
 /docs/unattended-host-design.md export-ignore
+
+# Android build proofs hash the exact lockfile blob on Windows and Linux.
+/android-client/native/Cargo.lock -text

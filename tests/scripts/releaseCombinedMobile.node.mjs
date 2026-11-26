@@ -128,3 +128,15 @@ test('both release stages request an actual v2 and v3 verification without lower
   assert.throws(() => verifyAndroidSignature(v2 + cert, 'a'.repeat(64)), /denied/)
   assert.throws(() => verifyAndroidSignature(v3 + cert, 'a'.repeat(64)), /denied/)
 })
+
+test('Android lockfile checkout preserves the exact source bytes in Windows and Linux release jobs', () => {
+  const path = 'android-client/native/Cargo.lock'
+  const root = fileURLToPath(new URL('../../', import.meta.url))
+  const git = args => execFileSync('git', args, { cwd: root, stdio: 'pipe' })
+  const blob = git(['cat-file', 'blob', 'HEAD:' + path])
+  assert.ok(blob.length > 0)
+  for (const autocrlf of ['true', 'false']) {
+    const checkout = git(['-c', 'core.autocrlf=' + autocrlf, 'cat-file', '--filters', 'HEAD:' + path])
+    assert.ok(checkout.equals(blob), 'Android Cargo.lock changed bytes with core.autocrlf=' + autocrlf)
+  }
+})
