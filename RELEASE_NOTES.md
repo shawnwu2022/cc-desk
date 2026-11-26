@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.4]
+
+Added
+
+- The Windows desktop app has a dedicated Remote Connections view for first-time setup, Android pairing, and sharing or stopping an explicitly selected CC Desk session.
+- The native Android app pairs by QR code or pairing code, lists shared sessions across paired computers, and provides live output, single-line input, and common terminal keys.
+- Read-only viewing and desktop-approved control are separate. Control is limited to the selected device and session and ends on expiry or revocation. Input with uncertain delivery is not automatically resent.
+
+Important
+
+- This is a test-channel prerelease. Stable Latest and the production relay are unchanged. It is not a general-purpose remote desktop or device administration tool; multi-line paste is not enabled.
+- Physical Android enrollment and the production relay route have not been verified end to end.
+
 ## [0.28.0-rc.3]
 
 Changed

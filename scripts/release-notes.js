@@ -31,21 +31,31 @@ function renderDocument(data, language) {
       return `## [${version}]\n\n${notes[language] ?? notes.en}\n`
     }).join('\n')
 }
-function composeReleaseNotes({ version, repository, sha, technical, data }) {
+function requireVersionedNotes(version, data) {
   const notes = readNotes(version, data)
   if (!notes || String(version).replace(/^v/, '') === 'Unreleased') throw new Error('versioned English release highlights are required before publication')
+  return notes
+}
+function composeReleaseNotes({ version, repository, sha, technical, data }) {
+  const notes = requireVersionedNotes(version, data)
   if (!/^[-\w.]+\/[-\w.]+$/.test(repository ?? '') || !/^[a-f0-9]{40}$/.test(sha ?? '') || !technical?.trim()) throw new Error('release notes source binding is incomplete')
   // 完整披露原样保留，现有 Source/Validation policy 校验继续逐行读取。
   return `${notes.en}\n\n[简体中文](https://github.com/${repository}/blob/${sha}/RELEASE_NOTES_CN.md)\n\n` +
     `<details>\n<summary>Technical validation details</summary>\n\n${technical}${technical.endsWith('\n') ? '' : '\n'}\n</details>\n`
 }
 function main() {
+  if (process.argv[2] === 'check-current' && process.argv.length === 3) {
+    const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+    requireVersionedNotes(version)
+    console.log('Verified versioned release highlights for ' + version)
+    return
+  }
   if (process.argv[2] === 'docs' && process.argv.length === 3) {
     const data = JSON.parse(fs.readFileSync(path.join(root, 'docs/release-notes.json'), 'utf8'))
     for (const [language, name] of [['en', 'RELEASE_NOTES.md'], ['zh', 'RELEASE_NOTES_CN.md']]) fs.writeFileSync(path.join(root, name), renderDocument(data, language))
     return
   }
-  if (process.argv[2] !== 'compose') throw new Error('usage: release-notes.js docs | compose --tag <tag> --technical <file> --output <file>')
+  if (process.argv[2] !== 'compose') throw new Error('usage: release-notes.js docs | check-current | compose --tag <tag> --technical <file> --output <file>')
   const options = new Map()
   for (let index = 3; index < process.argv.length; index += 2) {
     const key = process.argv[index], value = process.argv[index + 1]
