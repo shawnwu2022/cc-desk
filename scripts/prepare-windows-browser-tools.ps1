@@ -17,9 +17,18 @@ $bindgenArchive = Get-VerifiedArchive 'wasm-bindgen-0.2.129-x86_64-pc-windows-ms
 $llvm = Join-Path $root 'llvm'
 $bindgen = Join-Path $root 'bindgen'
 New-Item -ItemType Directory -Path $llvm, $bindgen -Force | Out-Null
-# Windows tar 不假设系统已装 xz；7-Zip 来自受控 runner 镜像。
-Invoke-Checked '7z' @('x', '-y', $llvmArchive, "-o$root")
-Invoke-Checked 'tar' @('-xf', (Join-Path $root 'clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar'), '-C', $llvm, '--strip-components=1')
+# 先校验官方压缩包，再直接解包；新 PowerShell 原样传输二进制流。
+if ($PSVersionTable.PSVersion -ge [version]'7.4') {
+    & {
+        $PSNativeCommandUseErrorActionPreference = $true
+        7z x -so $llvmArchive | tar -xf - -C $llvm --strip-components=1
+        if ($LASTEXITCODE -ne 0) { throw 'LLVM extraction failed' }
+    }
+} else {
+    # 旧版 PowerShell 会把原生命令管道转换为文本，保留原双步解包。
+    Invoke-Checked '7z' @('x', '-y', $llvmArchive, "-o$root")
+    Invoke-Checked 'tar' @('-xf', (Join-Path $root 'clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar'), '-C', $llvm, '--strip-components=1')
+}
 Invoke-Checked 'tar' @('-xf', $bindgenArchive, '-C', $bindgen, '--strip-components=1')
 $clang = Join-Path $llvm 'bin/clang.exe'
 $ar = Join-Path $llvm 'bin/llvm-ar.exe'

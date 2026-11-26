@@ -94,3 +94,10 @@ test('release runtime staging excludes only the unused client auto-start bootstr
   assert.doesNotThrow(()=>excludeReleaseClientBootstrap(temp));
  }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
+test('Verified LLVM extraction uses a binary stream when available and fails on either command',()=>{
+ const supplier=fs.readFileSync('scripts/prepare-windows-browser-tools.ps1','utf8');
+ assert.match(supplier,/if \(\$PSVersionTable\.PSVersion -ge \[version\]'7\.4'\)/);
+ assert.match(supplier,/\$PSNativeCommandUseErrorActionPreference = \$true[\s\S]+7z x -so \$llvmArchive \| tar -xf - -C \$llvm --strip-components=1/);
+ assert.match(supplier,/\$llvmArchive = Get-VerifiedArchive[\s\S]+7z x -so \$llvmArchive/);
+ assert.match(supplier,/else \{[\s\S]+Invoke-Checked '7z'[\s\S]+Invoke-Checked 'tar'/);
+});
