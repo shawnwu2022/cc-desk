@@ -33,6 +33,7 @@ export default {
   remotePairingTitle: "配对 Android 设备",
   remotePairingObserverHint: "配对后仅可查看。设备通过批准后会保持配对，直至你撤销。",
   remotePairingEndpoint: "自定义中继 WSS 地址",
+  remotePairingEndpointHint: "填写中转管理员提供的完整 wss:// 地址。如果地址带路径，请一并填写。",
   remotePairingVerify: "连接中转",
   remotePairingVerified: "已连接中转：{endpoint}",
   remotePairingFailed: "无法确认操作结果。请先刷新再试。",

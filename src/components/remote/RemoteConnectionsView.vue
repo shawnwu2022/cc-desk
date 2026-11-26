@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, shallowRef, useId } from 'vue'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { nativeObserverSetup } from '@/api/tauri'
 import { useI18n } from 'vue-i18n'
@@ -71,6 +71,8 @@ function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
   }
 }
 const endpoint = ref('')
+const endpointHintId = useId()
+const endpointReady = computed(() => endpoint.value.trim().startsWith('wss://') && endpoint.value.trim().length > 6)
 const minutes = ref('5')
 const selectedScope = ref('')
 const busy = ref(false)
@@ -126,7 +128,7 @@ function setEndpoint(value: string) {
 async function verify() {
   const input = endpoint.value.trim()
   const bridge = port.value
-  if (!bridge || !input.startsWith('wss://') || busy.value) return
+  if (!bridge || !endpointReady.value || busy.value) return
   verified.value = null
   snapshot.value = null
   selectedScope.value = ''
@@ -164,7 +166,7 @@ async function copyRegistration(){
   catch { setupCopied.value=false }
 }
 async function reopenRegistration(){
-  if(busy.value || !endpoint.value.trim().startsWith('wss://'))return
+  if(busy.value || !endpointReady.value)return
   busy.value=true; failure.value=null; setupCopied.value=false
   try {
     const value=await nativeObserverSetup({action:'publicRegistration',endpoint:endpoint.value.trim()}) as {kind?:unknown;metadata?:unknown}
@@ -237,9 +239,10 @@ function cancel() {
       <h2>{{ t('remotePairingTitle') }}</h2>
       <p>{{ t('remotePairingObserverHint') }}</p>
       <AppInput :model-value="endpoint" :label="t('remotePairingEndpoint')" :disabled="busy"
-        autocomplete="off" spellcheck="false" maxlength="2048" @update:model-value="setEndpoint" />
+        autocomplete="off" spellcheck="false" maxlength="2048" :described-by="endpointHintId" @update:model-value="setEndpoint" />
+      <p :id="endpointHintId">{{ t('remotePairingEndpointHint') }}</p>
       <div class="actions">
-        <AppButton v-if="!verified" variant="primary" :disabled="busy || !endpoint.trim().startsWith('wss://')" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
+        <AppButton v-if="!verified" variant="primary" :disabled="busy || !endpointReady" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
         <template v-else>
           <AppButton variant="ghost" :disabled="busy" @click="perform(handle => handle.current())">{{ t('remotePairingRefresh') }}</AppButton>
           <AppButton v-if="failure" variant="ghost" :disabled="busy" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
@@ -249,7 +252,7 @@ function cancel() {
       <p v-if="failure" role="alert">{{ t(failure === 'verify' ? 'remotePairingVerifyFailed' : 'remotePairingFailed') }}</p>
       <p v-if="setup?.kind === 'declined'" role="status">{{ t('remotePairingSetupDeclined') }}</p>
       <div v-if="!verified && setup?.kind !== 'relayAuthorizationRequired'" class="actions">
-        <AppButton variant="ghost" :disabled="busy || !endpoint.trim().startsWith('wss://')" @click="reopenRegistration">{{ t('remotePairingPublicRegistration') }}</AppButton>
+        <AppButton variant="ghost" :disabled="busy || !endpointReady" @click="reopenRegistration">{{ t('remotePairingPublicRegistration') }}</AppButton>
       </div>
       <div v-if="setup?.kind === 'profileRequired'" class="pairing">
         <p role="status">{{ t(publicRegistration ? 'remotePairingAuthRequired' : 'remotePairingProfileRequired') }}</p>
@@ -342,7 +345,7 @@ function cancel() {
   </section>
 </template>
 <style scoped>
-.remote-connections { display: grid; align-content: start; gap: 16px; min-width: 0; overflow: auto; padding: 24px; }
+.remote-connections { display: grid; align-content: start; gap: 16px; min-width: 0; }
 h1, h2, h3, p, dl, dd { margin: 0; }
 h1 { font-size: 20px; color: var(--text-primary); }
 p, dl { overflow-wrap: anywhere; color: var(--text-secondary); }

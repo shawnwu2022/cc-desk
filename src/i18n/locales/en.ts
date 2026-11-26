@@ -33,6 +33,7 @@ export default {
   remotePairingTitle: "Pair an Android device",
   remotePairingObserverHint: "Paired devices can view only. An approved device stays paired until you revoke it.",
   remotePairingEndpoint: "Custom relay WSS address",
+  remotePairingEndpointHint: "Enter the full wss:// address from your relay administrator, including the path if provided.",
   remotePairingVerify: "Connect relay",
   remotePairingVerified: "Relay connected: {endpoint}",
   remotePairingFailed: "The operation could not be confirmed. Refresh before trying again.",

@@ -8,7 +8,6 @@ import { useSidebarStore } from '@/stores/sidebar'
 import IconButton from '@/components/ui/IconButton.vue'
 import workspaceIcon from '@/assets/icons/sessions.svg'
 import projectsIcon from '@/assets/icons/folder.svg'
-import remoteIcon from '@/assets/icons/remote.svg'
 import settingsIcon from '@/assets/icons/settings.svg'
 
 const shell = useShellStore()
@@ -31,7 +30,6 @@ const emit = defineEmits<{ navigate: [section: ShellSection] }>()
 const destinations = [
   { section: 'workspace', label: 'workspace', icon: workspaceIcon },
   { section: 'projects', label: 'projects', icon: projectsIcon },
-  { section: 'remote', label: 'remoteConnections', icon: remoteIcon },
   { section: 'settings', label: 'settings', icon: settingsIcon },
 ] as const
 function navigate(section: ShellSection) {

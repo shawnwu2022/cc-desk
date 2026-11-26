@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n'
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { readFileSync } from 'node:fs'
 import SettingsView from '@/components/settings/SettingsView.vue'
+import { DESKTOP_PAIRING_PORT, type DesktopPairingPort } from '@/components/remote/desktopPairingPort'
 import AppShell from '@/components/shell/AppShell.vue'
 import NewSessionMenu from '@/components/sessions/NewSessionMenu.vue'
 import { useAppStore } from '@/stores/app'
@@ -24,15 +25,36 @@ beforeEach(() => {
   i18n = createI18n({ legacy: false, locale: 'en', messages: { en, zh } })
 })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; useAppStore().$dispose(); document.documentElement.removeAttribute('data-density'); document.documentElement.removeAttribute('data-theme'); document.documentElement.classList.remove('light', 'dark'); clearMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-function render() {
-  const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [i18n], stubs: { UpdateSection: true, AboutSection: true, ShortcutsSection: true } } })
+function render(pairingPort?: DesktopPairingPort) {
+  const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [i18n], provide: pairingPort ? { [DESKTOP_PAIRING_PORT as symbol]: pairingPort } : {}, stubs: { UpdateSection: true, AboutSection: true, ShortcutsSection: true } } })
   wrappers.push(wrapper); return wrapper
 }
 describe('Unified settings shell', () => {
-  // 正常设置导航恰好七个真实分类，不再以旧startup名称作为一级入口。
-  it('Settings_SevenSections_001', async () => {
+  it('Settings_RemoteConnectionHasOneEntryAndExplainsRequiredAddress', async () => {
+    const verify = vi.fn<DesktopPairingPort['verify']>().mockResolvedValue({ kind: 'profileRequired' })
+    const wrapper = render({ verify })
+    expect(wrapper.find('[data-remote-connections]').exists()).toBe(false)
+    await wrapper.get('[data-settings-section="remote"]').trigger('click'); await vi.dynamicImportSettled(); await flushPromises()
+    const panel = wrapper.get('[data-remote-connections]')
+    const input = panel.get('input')
+    const connect = panel.findAll('button').find(button => button.text() === 'Connect relay')!
+    expect(panel.get('#' + input.attributes('aria-describedby')).text()).toContain('wss://')
+    expect(connect.attributes('disabled')).toBeDefined()
+    await input.setValue('https://relay.example.com'); expect(connect.attributes('disabled')).toBeDefined()
+    await input.setValue('wss://'); expect(connect.attributes('disabled')).toBeDefined()
+    expect(verify).not.toHaveBeenCalled()
+    await input.setValue(' wss://relay.example.com/relay '); expect(connect.attributes('disabled')).toBeUndefined()
+    await connect.trigger('click'); await flushPromises()
+    expect(verify).toHaveBeenCalledExactlyOnceWith('wss://relay.example.com/relay')
+    await wrapper.get('[data-settings-section="terminal"]').trigger('click')
+    await wrapper.get('[data-settings-section="remote"]').trigger('click')
+    expect((input.element as HTMLInputElement).value).toBe(' wss://relay.example.com/relay ')
+    expect(verify).toHaveBeenCalledTimes(1)
+  })
+  // 正常设置导航恰好八个真实分类，不再以旧startup名称作为一级入口。
+  it('Settings_Categories_001', async () => {
     const wrapper = render()
-    expect(wrapper.findAll('[data-settings-section]').map(item => item.attributes('data-settings-section'))).toEqual(['general', 'appearance', 'terminal', 'launch-configurations', 'shortcuts', 'update', 'about'])
+    expect(wrapper.findAll('[data-settings-section]').map(item => item.attributes('data-settings-section'))).toEqual(['general', 'appearance', 'terminal', 'launch-configurations', 'remote', 'shortcuts', 'update', 'about'])
     expect(useSidebarStore().activeSettingsSection).toBe('general')
     useSidebarStore().openSettings('startup'); await flushPromises()
     expect(useSidebarStore().activeSettingsSection).toBe('general')

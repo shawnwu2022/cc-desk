@@ -128,16 +128,16 @@ describe('Unified application shell', () => {
   })
 
   // 一级导航只有工作区、项目、设置，资源入口不进入全局导航。
-  it('Shell_FourPrimaryDestinations_001', async () => {
+  it('Shell_ThreePrimaryDestinations_001', async () => {
     const wrapper = render(AppShell)
     const buttons = wrapper.findAll('[data-primary-section]')
-    expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'remote', 'settings'])
-    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Remote Connections', 'Settings'])
+    expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'settings'])
+    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Settings'])
     await buttons[1].trigger('click')
     expect(useShellStore().section).toBe('projects')
     expect(buttons[1].attributes('aria-current')).toBe('page')
     await buttons[2].trigger('click')
-    expect(useShellStore().section).toBe('remote')
+    expect(useShellStore().section).toBe('settings')
     expect(buttons[2].attributes('aria-current')).toBe('page')
     expect(wrapper.findAll('nav[aria-label="Primary navigation"]')).toHaveLength(1)
   })
@@ -330,7 +330,7 @@ describe('Unified application shell', () => {
   it('Shell_LocalizedNavigation_018', async () => {
     const wrapper = render(PrimaryNav)
     ;(i18n.global.locale as any).value = 'zh'; await nextTick()
-    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('aria-label'))).toEqual(['工作区', '项目', '远程连接', '设置'])
+    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('aria-label'))).toEqual(['工作区', '项目', '设置'])
   })
   // 会话栏隐藏时Escape不会改变其桌面显示偏好。
   it('Shell_HiddenPanelIgnoresEscape_019', async () => {
@@ -438,7 +438,7 @@ describe('Unified application shell', () => {
     const terminal = wrapper.get('[data-unified-terminal-host]').element
     host.callbacks.get('settings')!(); await flushPromises()
     expect(wrapper.get('[data-settings-content]').attributes('data-settings-content')).toBe('general')
-    expect(wrapper.findAll('[data-settings-section]')).toHaveLength(7)
+    expect(wrapper.findAll('[data-settings-section]')).toHaveLength(8)
     host.callbacks.get('shortcuts')!(); await flushPromises()
     expect(wrapper.get('[data-settings-content]').attributes('data-settings-content')).toBe('shortcuts')
     await wrapper.get('[data-settings-section="appearance"]').trigger('click')
