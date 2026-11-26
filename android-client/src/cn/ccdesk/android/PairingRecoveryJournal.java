@@ -107,11 +107,13 @@ final class PairingRecoveryJournal {
         }
     }
 
-    void remove(UUID id) {
+    boolean remove(UUID id) {
         synchronized (LOCK) {
             AtomicFile target = file(id);
+            File base = target.getBaseFile();
             target.delete();
-
+            return !base.exists() && !new File(base.getPath() + ".new").exists()
+                && !new File(base.getPath() + ".bak").exists();
         }
     }
 

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.6] - 2026-11-26
+
+### Fixed
+
+- Android waits for the pairing cancellation result. If saving finished first, it shows the paired computer instead of claiming the attempt was cancelled.
+
 ## [0.28.0-rc.5] - 2026-11-26
 
 ### Improved

@@ -472,10 +472,16 @@ final class NativeDesktopBackend implements DesktopBackend {
         if (attempt.facade != null) attempt.facade.close();
     }
 
-    void cancelEnrollment() {
+    void cancelEnrollment(java.util.function.Consumer<Boolean> completion) {
         if (!closed.get()) executor.execute(() -> {
-            if (pending != null) recovery.remove(pending.id);
-            cancelPending();
+            Attempt attempt = pending;
+            // 若当前没有配对请求，终态回调已经进入队列。
+            if (attempt == null) return;
+            boolean removed = false;
+            try { removed = recovery.remove(attempt.id); }
+            catch (RuntimeException ignored) { /* 无法确认记录已移除时，不报告取消成功。 */ }
+            try { cancelPending(); }
+            finally { completion.accept(removed); }
         });
     }
 

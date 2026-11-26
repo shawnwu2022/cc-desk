@@ -27,7 +27,8 @@ public final class MainActivity extends Activity {
     private DesktopStore store;
     private NativeDesktopBackend backend;
     private boolean pairingPending;
-    private enum PairingNotice { NONE, FAILED, SAVED }
+    private boolean cancellingEnrollment;
+    private enum PairingNotice { NONE, FAILED, SAVED, CANCELLED, CANCEL_UNCONFIRMED }
     private PairingNotice pairingNotice = PairingNotice.NONE;
     private TerminalControlPanel controlPanel;
     private DesktopBackend.Desktop controlDesktop;
@@ -133,13 +134,8 @@ public final class MainActivity extends Activity {
             home.title(card, "等待电脑确认", 20, true);
             home.status(card, "已发起配对", true);
             home.body(card, "在电脑的远程连接页同意这次请求。本机验证并保存凭据后才算配对完成。", 15);
-            home.action(card, "取消配对", false, () -> {
-                enrollmentEpoch++;
-                pairingPending = false;
-                pairingNotice = PairingNotice.NONE;
-                backend.cancelEnrollment();
-                render();
-            });
+            home.action(card, cancellingEnrollment ? "正在取消…" : "取消配对", false,
+                this::cancelEnrollment).setEnabled(!cancellingEnrollment);
         } else {
             LinearLayout card = home.card(content);
             if (pairingNotice == PairingNotice.FAILED) {
@@ -148,6 +144,11 @@ public final class MainActivity extends Activity {
             } else if (pairingNotice == PairingNotice.SAVED) {
                 home.title(card, "已配对并保存", 20, true);
                 home.body(card, "可以在设备卡片中查看会话。是否有内容取决于电脑的共享授权。", 15);
+            } else if (pairingNotice == PairingNotice.CANCELLED) {
+                home.title(card, "已取消配对", 20, true);
+            } else if (pairingNotice == PairingNotice.CANCEL_UNCONFIRMED) {
+                home.title(card, "无法确认配对已取消", 20, true);
+                home.body(card, "请检查设备列表。如果该电脑已配对，可在电脑端撤销手机授权。", 15);
             } else if (rows.isEmpty()) {
                 home.title(card, "配对第一台电脑", 20, true);
                 home.body(card, "在电脑的远程连接页创建邀请，用手机扫描二维码或输入配对码。", 15);
@@ -714,6 +715,24 @@ public final class MainActivity extends Activity {
         dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
     }
 
+    private void cancelEnrollment() {
+        if (!pairingPending || cancellingEnrollment) return;
+        long epoch = enrollmentEpoch;
+        cancellingEnrollment = true;
+        render();
+        backend.cancelEnrollment(removed -> runOnUiThread(() ->
+            finishEnrollment(epoch, removed ? PairingNotice.CANCELLED : PairingNotice.CANCEL_UNCONFIRMED)));
+    }
+
+    private void finishEnrollment(long epoch, PairingNotice notice) {
+        if (!active || epoch != enrollmentEpoch) return;
+        enrollmentEpoch++;
+        pairingPending = false;
+        cancellingEnrollment = false;
+        pairingNotice = notice;
+        render();
+    }
+
     private void redeem(PairingInvite invite) {
         long epoch = ++enrollmentEpoch;
         pairingNotice = PairingNotice.NONE;
@@ -721,23 +740,11 @@ public final class MainActivity extends Activity {
         render();
         DesktopBackend.EnrollmentCallback completion = new DesktopBackend.EnrollmentCallback() {
             @Override public void approved(DesktopBackend.Desktop desktop) {
-                runOnUiThread(() -> {
-                    if (!active || epoch != enrollmentEpoch) return;
-                    enrollmentEpoch++;
-                    pairingPending = false;
-                    pairingNotice = PairingNotice.SAVED;
-                    render();
-                });
+                runOnUiThread(() -> finishEnrollment(epoch, PairingNotice.SAVED));
             }
             @Override public void state(DesktopBackend.State state) {
-                runOnUiThread(() -> {
-                    if (!active || epoch != enrollmentEpoch) return;
-                    if (state != DesktopBackend.State.WAITING_FOR_DESKTOP) {
-                        pairingPending = false;
-                        pairingNotice = PairingNotice.FAILED;
-                        render();
-                    }
-                });
+                if (state != DesktopBackend.State.WAITING_FOR_DESKTOP)
+                    runOnUiThread(() -> finishEnrollment(epoch, PairingNotice.FAILED));
             }
         };
         try { backend.redeemInvite(invite, identities, completion); }
