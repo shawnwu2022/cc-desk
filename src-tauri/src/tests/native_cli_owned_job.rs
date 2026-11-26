@@ -215,7 +215,11 @@ fn OwnedJob_TEST_ONLY_TreeWorker_090() {
         }
         output.flush().unwrap();
         drop(output);
-        std::fs::write(done, b"2097152").unwrap();
+        let done = std::path::Path::new(&done);
+        // 先完整写入同目录临时文件，再原子发布完成标记，避免读取空文件。
+        let mut staged = tempfile::NamedTempFile::new_in(done.parent().unwrap()).unwrap();
+        staged.write_all(b"2097152").unwrap();
+        staged.persist_noclobber(done).unwrap();
     }
     let _ = child.wait();
     panic!("fixed descendant exited before the owning Job stopped the root");
