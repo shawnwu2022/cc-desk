@@ -195,7 +195,8 @@ try {
 } finally {
     if (Test-Path -LiteralPath $keystore -PathType Leaf) { Remove-Item -LiteralPath $keystore -Force }
 }
-$signed = @(Run $signer @('verify','--verbose','--print-certs','--min-sdk-version','31',$stagedSigned))
+# 用 API 27 验签才能实际覆盖 v2 和 v3；不改变安装最低 API 31。
+$signed = @(Run $signer @('verify','--verbose','--print-certs','--min-sdk-version','27',$stagedSigned))
 $certs = @($signed | Where-Object { $_ -cmatch '^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9]{64})$' })
 Require ($certs.Count -eq 1 -and ($certs[0] -match ': ([a-fA-F0-9]{64})$') -and $Matches[1] -ieq $signerPin) 'APK signer differs from the pinned authorized production signer'
 Require (-not @($signed | Where-Object { $_ -match 'certificate DN:.*(?:Android Debug|CN=debug)' })) 'Debug certificate cannot sign a release candidate'

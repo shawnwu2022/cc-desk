@@ -113,3 +113,18 @@ test('release forwards only the three protected Android signer secrets to the re
   assert.deepEqual(call.split('\n').slice(0, 7), ['    secrets:', ...names.flatMap(name => ['      ' + name + ':', '        required: true'])])
   assert.ok(signer.includes('    environment: android-production'))
 })
+
+
+test('both release stages request an actual v2 and v3 verification without lowering app minimum', () => {
+  const build = readFileSync(new URL('../../android-client/build-production.ps1', import.meta.url), 'utf8')
+  const publish = readFileSync(new URL('../../scripts/release-combined-mobile.mjs', import.meta.url), 'utf8')
+  assert.match(build, /'sign','--ks'[\s\S]*?'--min-sdk-version','31','--v2-signing-enabled','true','--v3-signing-enabled','true'/)
+  assert.match(build, /'verify','--verbose','--print-certs','--min-sdk-version','27'/)
+  assert.match(publish, /'verify','--verbose','--print-certs','--min-sdk-version','27'/)
+  const v2 = 'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+  const v3 = 'Verified using v3 scheme (APK Signature Scheme v3): true\n'
+  const cert = 'Signer #1 certificate SHA-256 digest: ' + 'a'.repeat(64) + '\n'
+  assert.doesNotThrow(() => verifyAndroidSignature(v2 + v3 + cert, 'a'.repeat(64)))
+  assert.throws(() => verifyAndroidSignature(v2 + cert, 'a'.repeat(64)), /denied/)
+  assert.throws(() => verifyAndroidSignature(v3 + cert, 'a'.repeat(64)), /denied/)
+})
