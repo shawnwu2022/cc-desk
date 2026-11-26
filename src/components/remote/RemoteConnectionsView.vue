@@ -21,7 +21,7 @@ function shareWith(device: ApprovedDevice) {
   if (selected.length === 0 || selected.length > 4 || selected.some(choice => !choice)) return
   const role = enableControl.value ? 'Controller' as const : undefined
   enableControl.value = false
-  void perform(handle => handle.share!(device, selected.map(choice => ({ runId: choice!.runId, generation: choice!.generation, label: choice!.label, ...(role ? { role } : {}) }))))
+  void perform(handle => handle.share!(device, selected.map(choice => ({ runId: choice!.runId, generation: choice!.generation, label: choice!.label, ...(role ? { role } : {}) }))), true)
 }
 const injectedPort = inject(DESKTOP_PAIRING_PORT, null)
 const port = shallowRef<DesktopPairingPort | null>(injectedPort)
@@ -190,7 +190,7 @@ async function showPublicRegistration() {
     if (!disposed) busy.value = false
   }
 }
-async function perform(operation: (handle: VerifiedPairing) => Promise<PairingSnapshot>) {
+async function perform(operation: (handle: VerifiedPairing) => Promise<PairingSnapshot>, readAfterShareFailure = false) {
   const handle = verified.value
   if (!handle || busy.value || disposed) return
   failure.value = null
@@ -207,6 +207,17 @@ async function perform(operation: (handle: VerifiedPairing) => Promise<PairingSn
       // Unknown operation outcome: hide old codes and decisions until a fresh read.
       snapshot.value = null
       failure.value = 'operation'
+      if (readAfterShareFailure) {
+        // 只核对实际状态，不重发可能已生效的共享请求。
+        try {
+          const state = await handle.current()
+          if (!disposed && verified.value === handle) {
+            if (!state.scopeChoices.some(scope => scope.id === selectedScope.value)) selectedScope.value = ''
+            snapshot.value = state
+            now.value = Date.now()
+          }
+        } catch { /* 保持过期操作入口隐藏，等待用户主动刷新。 */ }
+      }
     }
   } finally {
     if (!disposed) busy.value = false
