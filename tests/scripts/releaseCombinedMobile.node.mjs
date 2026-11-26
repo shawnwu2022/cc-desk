@@ -100,3 +100,16 @@ test('manual release and candidate workflows require no typed versionCode and pr
   assert.match(android, /actions\/checkout@v4[\s\S]+?node scripts\/release-combined-mobile\.mjs android-version-code[\s\S]+?VERSION_CODE=.*GITHUB_ENV/)
   assert.match(android, /environment: android-production/)
 })
+
+test('release forwards only the three protected Android signer secrets to the reusable workflow', () => {
+  const load = name => readFileSync(new URL('../../.github/workflows/' + name, import.meta.url), 'utf8').replaceAll('\r', '')
+  const release = load('release.yml').split('\n  android:\n')[1].split('\n  release:')[0]
+  const signer = load('android-production.yml')
+  const names = ['ANDROID_RELEASE_KEYSTORE_B64', 'ANDROID_RELEASE_KEYSTORE_PASSWORD', 'ANDROID_RELEASE_KEY_PASSWORD']
+  const expected = names.map(name => '      ' + name + ': '+ '$' + '{{ secrets.' + name + ' }}')
+  assert.deepEqual(release.split('\n').filter(line => line.startsWith('      ANDROID_RELEASE_')), expected)
+  assert.ok(!release.includes('secrets: inherit'))
+  const call = signer.split('  workflow_call:\n')[1].split('    outputs:')[0]
+  assert.deepEqual(call.split('\n').slice(0, 7), ['    secrets:', ...names.flatMap(name => ['      ' + name + ':', '        required: true'])])
+  assert.ok(signer.includes('    environment: android-production'))
+})

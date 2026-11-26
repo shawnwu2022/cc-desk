@@ -287,6 +287,11 @@ jobs:
     needs: [preflight, build]
     if: needs.preflight.outputs.mobile_release == 'true' && github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/android-production.yml
+    # Named forwarding resolves the protected environment secrets in the called job.
+    secrets:
+      ANDROID_RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
 
   release:
     needs: [preflight, build, android]
