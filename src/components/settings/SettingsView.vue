@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SETTINGS_SECTIONS, useSidebarStore, normalizeSettingsSection } from '@/stores/sidebar'
 import { useAppStore } from '@/stores/app'
@@ -19,8 +19,11 @@ const { t } = useI18n()
 const sidebar = useSidebarStore()
 const app = useAppStore()
 const currentVersion = __APP_VERSION__
+const RemoteConnectionsView = defineAsyncComponent(() => import('@/components/remote/RemoteConnectionsView.vue'))
 const section = computed(() => normalizeSettingsSection(sidebar.activeSettingsSection))
-const labels = { general: 'settingsGeneral', appearance: 'appearance', terminal: 'settingsTerminal', 'launch-configurations': 'settingsLaunchConfigurations', shortcuts: 'shortcuts', update: 'update', about: 'about' }
+const remoteLoaded = ref(false)
+watch(section, value => { if (value === 'remote') remoteLoaded.value = true }, { immediate: true })
+const labels = { general: 'settingsGeneral', appearance: 'appearance', terminal: 'settingsTerminal', 'launch-configurations': 'settingsLaunchConfigurations', remote: 'remoteConnections', shortcuts: 'shortcuts', update: 'update', about: 'about' }
 const items = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(labels[id]) })))
 </script>
 <template>
@@ -45,6 +48,7 @@ const items = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(labels[
       <ShortcutsSection v-else-if="section === 'shortcuts'" :active="active" />
       <UpdateSection v-else-if="section === 'update'" :active="active" />
       <AboutSection v-else-if="section === 'about'" :active="active" />
+      <RemoteConnectionsView v-if="remoteLoaded" v-show="section === 'remote'" />
     </div>
   </section>
 </template>
