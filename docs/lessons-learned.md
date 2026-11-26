@@ -163,3 +163,8 @@ The desktop Release caller omitted named forwarding, so the Android signer recei
 
 - RC4 已签名且通过两次产物复核，却因 `docs/release-notes.json` 缺少当前版本而在最后写说明时停下。`CHANGELOG.md` 有同版本不能替代实际发布入口的说明源。
 - 在普通 CI 和发布构建前核对当前精确版本的发布说明；正式发布继续重新读取同提交的说明并保留实际技术披露。证据：[失败的发布任务](https://github.com/shawnwu2022/cc-desk/actions/runs/45753101953/job/139691747812)。
+
+## APK 构建证明必须绑定跨平台一致的锁文件字节
+
+- RC4 的 Windows build proof 哈希匹配 CRLF checkout；Linux 发布检查读取同一提交的 LF blob，拒绝发布。精确运行：<https://github.com/shawnwu2022/cc-desk/actions/runs/45759279625/job/139726348749>。
+- 固定 Android 原生 Cargo.lock 的 Git checkout 字节，不在校验时归一化、不接受两套摘要。跨平台回归实际调用 Git，分别核对 autocrlf=true/false 得到的字节与原始 blob。
