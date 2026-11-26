@@ -21,6 +21,7 @@ The 19-file manifest is byte-exact across platforms; `.gitattributes` disables n
 | Tauri Windows icon | `src-tauri/icons/icon.ico` | Original ICO: 16/24/32/48/64/128/256 |
 | Windows NSIS installer shell | `bundle.windows.nsis.installerIcon`: `icons/icon.ico` | Same original seven-frame ICO |
 | Tauri macOS icon | `src-tauri/icons/icon.icns` | Tauri-encoded family using approved size-specific pixels |
+| Android launcher | Packaged adaptive icon | Exact 256 PNG, with a safe inset and neutral Android background |
 | High-resolution source | `src-tauri/icons/cc-desk-icon-source.png` | 1024 PNG |
 
 The explicit `app-icon` CSS class exempts these images from the dark-theme filter, including when Vite inlines small PNGs into data URLs. Vite imports the titlebar `srcset` and favicon so production HTML/chunks reference emitted assets. Existing Tauri bundle icon paths stay stable; `tauri.windows.conf.json` does not override them. Normal release builds consume these checked-in files through the unchanged Windows NSIS, macOS App/DMG and Linux AppImage build paths.

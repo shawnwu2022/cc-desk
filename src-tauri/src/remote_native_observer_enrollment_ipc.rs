@@ -25,6 +25,9 @@ use std::{
 };
 use tauri::{ipc::Request, Manager, State, Webview};
 
+// 四项控制会话连同完整设备身份可超过通用文档请求的 1 KiB。
+const ENROLLMENT_REQUEST_LIMIT: usize = 2048;
+
 #[derive(Deserialize)]
 #[serde(
     tag = "action",
@@ -197,8 +200,12 @@ pub(crate) async fn remote_native_observer_setup(
     owner_service: State<'_, OwnerService>,
     host_service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
 ) -> Result<Reply, SafeError> {
-    let (binding, caller, action) =
-        runtime.admit_host_document::<Action, _>(&webview, request.headers(), request.body())?;
+    let (binding, caller, action) = runtime.admit_host_document_with_limit::<Action, _>(
+        &webview,
+        request.headers(),
+        request.body(),
+        ENROLLMENT_REQUEST_LIMIT,
+    )?;
     let app = webview.app_handle();
     let window = webview.window();
     let action = match action {

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.5] - 2026-11-26
+
+### Improved
+
+- Split Android devices and shared sessions into separate views, retain offline paired computers, and display search coverage.
+- Improve manual pairing, recover interrupted local pairing publication, and keep terminal navigation usable without replaying unconfirmed input.
+
+### Limits
+
+- Test-channel only. Does not include a full all-sessions catalogue or lifecycle management and does not change the production Relay.
+
 ## [0.28.0-rc.4] - 2026-11-25
 
 ### Added

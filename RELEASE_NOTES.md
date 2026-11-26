@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.5]
+
+Improved
+
+- The Android app separates paired computers and shared sessions into tabs. See saved computers offline, edit their local names, and search sessions loaded from a single computer or all paired computers. When some results have not loaded, the app says so.
+- Pair by QR code or pairing code. The manual form keeps field labels visible, focuses invalid input, and scrolls on short screens. An approved pairing can resume local recovery after an interruption.
+- Keep your place while reading terminal output. Use Latest output to jump back intentionally; stop and common keys stay reachable. Input with uncertain delivery is not automatically resent.
+
+Limits
+
+- Test-channel prerelease. Stable Latest and the production Relay are unchanged. Only explicitly shared sessions are listed; full device-wide catalogue and lifecycle management are not included. Existing approved session control retains the same permissions.
+- The production relay route and new physical-device enrollment have not been verified end to end.
+
 ## [0.28.0-rc.4]
 
 Added

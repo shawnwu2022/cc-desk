@@ -26,7 +26,8 @@ try {
         '-Xlint:-options', '-classpath', ("$platform;$ZxingCore"), '-d', "$out/classes") + $sources)
     Run "$Jdk/bin/jar.exe" @('cf', "$out/classes.jar", '-C', "$out/classes", '.')
     Run "$bt/d8.bat" @('--min-api', '31', '--lib', $platform, '--output', "$out/dex", "$out/classes.jar", $ZxingCore)
-    Run "$bt/aapt.exe" @('package', '-f', '-M', "$root/AndroidManifest.xml", '-I', $platform, '-A', "$root/assets",
+    $iconResources = & "$root/prepare-icon-resources.ps1" -WorkDirectory $out
+    Run "$bt/aapt.exe" @('package', '-f', '--no-crunch', '-M', "$root/AndroidManifest.xml", '-I', $platform, '-S',$iconResources, '-A', "$root/assets",
         '-F', "$out/development-unsigned.apk")
     Push-Location "$out/dex"
     try { Run "$bt/aapt.exe" @('add', "$out/development-unsigned.apk", 'classes.dex') }

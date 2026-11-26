@@ -108,7 +108,7 @@ final class PairingInvite implements AutoCloseable {
         }
     }
 
-    private static String fingerprint(String hex) {
+    static String fingerprint(String hex) {
         StringBuilder out = new StringBuilder(20);
         for (int i = 0; i < 100; i += 5) {
             int value = 0;

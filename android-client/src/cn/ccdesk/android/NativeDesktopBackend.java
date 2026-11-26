@@ -17,23 +17,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class NativeDesktopBackend implements DesktopBackend {
     private final Activity activity;
     private final Runnable onChanged;
+    private final DesktopStore store;
+    private final PairingRecoveryJournal recovery;
     private final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1);
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Map<UUID, Connection> paired = new ConcurrentHashMap<>();
     private Attempt pending;
 
-    private NativeDesktopBackend(Activity activity, Runnable onChanged) {
+    private NativeDesktopBackend(Activity activity, DesktopStore store, Runnable onChanged) {
         this.activity = activity;
+        this.store = store;
+        this.recovery = new PairingRecoveryJournal(activity);
         this.onChanged = onChanged;
         executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
     }
 
-    static NativeDesktopBackend load(Activity activity, Runnable onChanged) {
+    static NativeDesktopBackend load(Activity activity, DesktopStore store, Runnable onChanged) {
         try {
             System.loadLibrary("cc_desk_android_native");
             // Calls a real symbol when loading so unsuitable/mismatched libraries cannot activate.
             if (nativeAndroidAbiVersion() != 3 || nativePairingState(0) != 0) return null;
-            return new NativeDesktopBackend(activity, onChanged);
+            return new NativeDesktopBackend(activity, store, onChanged);
         } catch (SecurityException | LinkageError ignored) {
             return null;
         }
@@ -59,10 +63,11 @@ final class NativeDesktopBackend implements DesktopBackend {
                 HardwareIdentity approval = provision(keys, id, HardwareIdentity.Usage.APPROVAL);
                 attempt.facade = new NativeKeystoreBridge(activity, id, endpoint, relay, approval);
                 if (closed.get()) { cancelPending(); return; }
+                recovery.stage(attempt.link);
                 attempt.handle = nativeBeginPairing(attempt.facade, localId(id),
                     invite.relay.toString(), code, invite.hostCommitment(), endpoint.spki(),
                     relay.spki(), approval.spki());
-                if (attempt.handle == 0) { fail(attempt); return; }
+                if (attempt.handle == 0) { recovery.remove(id); fail(attempt); return; }
                 callback.state(State.WAITING_FOR_DESKTOP);
                 schedule(() -> pollEnrollment(attempt));
             } catch (Exception | LinkageError denied) { fail(attempt); }
@@ -77,13 +82,13 @@ final class NativeDesktopBackend implements DesktopBackend {
             if (status == 1) { schedule(() -> pollEnrollment(attempt)); return; }
             if (status != 2) { fail(attempt); return; }
             String host = nativePairingHostId(attempt.handle);
-            if (!attempt.invite.matchesHost(host)) { fail(attempt); return; }
-            Desktop desktop = new Desktop(attempt.id, host, "电脑 " + host.substring(0, 8),
-                attempt.invite.relay);
+            if (!attempt.link.accepts(host)) { fail(attempt); return; }
+            Desktop desktop = attempt.link.approved(host);
+            if (!recovery.promote(attempt.link, desktop, store)) { fail(attempt); return; }
             paired.put(attempt.id, new Connection(desktop, attempt.handle, attempt.facade));
             pending = null;
             attempt.callback.approved(desktop);
-        } catch (RuntimeException | LinkageError e) { fail(attempt); }
+        } catch (java.io.IOException | RuntimeException | LinkageError e) { fail(attempt); }
     }
 
     private void fail(Attempt attempt) {
@@ -114,7 +119,36 @@ final class NativeDesktopBackend implements DesktopBackend {
                     if (facade != null) facade.close();
                 }
             }
+            restoreInterrupted(keys);
         });
+    }
+
+    private void restoreInterrupted(IdentityProvider keys) {
+        try {
+            for (PairingRecoveryLink link : recovery.read()) {
+                if (closed.get()) return;
+                NativeKeystoreBridge facade = null;
+                try {
+                    HardwareIdentity endpoint = keys.open(link.id, HardwareIdentity.Usage.ENDPOINT);
+                    HardwareIdentity relay = keys.open(link.id, HardwareIdentity.Usage.RELAY);
+                    HardwareIdentity approval = keys.open(link.id, HardwareIdentity.Usage.APPROVAL);
+                    facade = new NativeKeystoreBridge(activity, link.id, endpoint, relay, approval);
+                    String verified = nativeReadPairedHostId(facade, localId(link.id), link.relay.toString(),
+                        endpoint.spki(), relay.spki(), approval.spki());
+                    if (!link.accepts(verified) || closed.get()) continue;
+                    Desktop desktop = link.approved(verified);
+                    if (!recovery.promote(link, desktop, store)) continue;
+                    paired.putIfAbsent(link.id, new Connection(desktop, 0, null));
+                    changed();
+                } catch (Exception | LinkageError denied) {
+                    // 提示记录不是权限；没有本机有效收据就不恢复。
+                } finally {
+                    if (facade != null) facade.close();
+                }
+            }
+        } catch (java.io.IOException ignored) {
+            // 既有设备仍由主索引恢复。
+        }
     }
 
     boolean verified(Desktop desktop) {
@@ -439,19 +473,12 @@ final class NativeDesktopBackend implements DesktopBackend {
     }
 
     void cancelEnrollment() {
-        if (!closed.get()) executor.execute(this::cancelPending);
-    }
-
-    void discardUnpublished(Desktop desktop) {
-        if (closed.get()) return;
-        executor.execute(() -> {
-            Connection c = paired.remove(desktop.localId);
-            if (c == null) return;
-            stopObserver(c);
-            if (c.pairing != 0) nativeCancelPairing(c.pairing);
-            if (c.facade != null) c.facade.close();
+        if (!closed.get()) executor.execute(() -> {
+            if (pending != null) recovery.remove(pending.id);
+            cancelPending();
         });
     }
+
 
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;
@@ -480,13 +507,16 @@ final class NativeDesktopBackend implements DesktopBackend {
     }
 
     private static final class Attempt {
-        final PairingInvite invite;
+        final PairingRecoveryLink link;
         final UUID id;
         final EnrollmentCallback callback;
         long handle;
         NativeKeystoreBridge facade;
         Attempt(PairingInvite invite, UUID id, EnrollmentCallback callback) {
-            this.invite = invite; this.id = id; this.callback = callback;
+            this.id = id;
+            this.link = new PairingRecoveryLink(id, invite.relay,
+                invite.hostEndpointId != null ? invite.hostEndpointId : invite.hostFingerprintPrefix);
+            this.callback = callback;
         }
     }
 

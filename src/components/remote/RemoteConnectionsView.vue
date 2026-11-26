@@ -83,8 +83,36 @@ const snapshot = shallowRef<PairingSnapshot | null>(null)
 const now = ref(Date.now())
 let disposed = false
 let ticker: ReturnType<typeof setInterval> | undefined
+let invitationRead: Promise<void> | null = null
+let lastInvitationRead = Date.now()
+
+async function readWaitingInvitation() {
+  const handle = verified.value
+  const prior = snapshot.value
+  const id = prior?.invite?.inviteId
+  if (disposed || busy.value || invitationRead || !handle || !id || !inviteLive.value
+    || prior.pending.some(request => request.inviteId === id)
+    || now.value - lastInvitationRead < 3000) return
+  lastInvitationRead = now.value
+  invitationRead = (async () => {
+    try {
+      const state = await handle.current()
+      if (!disposed && !busy.value && verified.value === handle && snapshot.value === prior
+        && prior.invite!.expiresUnixMs > Date.now()) {
+        snapshot.value = state
+        now.value = Date.now()
+      }
+    } catch { /* 暂态只读失败不清空邀请，下一轮再检查。 */ }
+  })()
+  try { await invitationRead } finally { invitationRead = null }
+}
+
 onMounted(() => {
-  ticker = setInterval(() => { if (invite.value) now.value = Date.now() }, 1000)
+  ticker = setInterval(() => {
+    if (!invite.value) return
+    now.value = Date.now()
+    void readWaitingInvitation()
+  }, 1000)
   void initializeNativeSetup()
 })
 onUnmounted(() => { disposed = true; if (ticker !== undefined) clearInterval(ticker) })
@@ -135,6 +163,8 @@ async function verify() {
   publicRegistration.value = ''
   busy.value = true
   try {
+    if (invitationRead) await invitationRead
+    if (disposed) return
     const result = await bridge.verify(input)
     if (disposed) return
     if (result.kind !== 'verified') { setup.value = result; return }
@@ -196,6 +226,8 @@ async function perform(operation: (handle: VerifiedPairing) => Promise<PairingSn
   failure.value = null
   busy.value = true
   try {
+    if (invitationRead) await invitationRead
+    if (disposed || verified.value !== handle) return
     const state = await operation(handle)
     if (!disposed && verified.value === handle) {
       if (!state.scopeChoices.some(scope => scope.id === selectedScope.value)) selectedScope.value = ''

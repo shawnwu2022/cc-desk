@@ -8,8 +8,8 @@ import android.text.InputType;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.io.IOException;
 import java.net.URI;
@@ -17,10 +17,18 @@ import java.util.List;
 import java.util.UUID;
 
 public final class MainActivity extends Activity {
+    private static final String HOME_SESSIONS = "home.sessions";
     private LinearLayout content;
+    private RemoteHomeView home;
+    private SessionBrowser sessionBrowser;
+    private boolean showingSessions;
+    private boolean lastHomeSessions;
+    private UUID lastHomeSelection;
     private DesktopStore store;
     private NativeDesktopBackend backend;
     private boolean pairingPending;
+    private enum PairingNotice { NONE, FAILED, SAVED }
+    private PairingNotice pairingNotice = PairingNotice.NONE;
     private TerminalControlPanel controlPanel;
     private DesktopBackend.Desktop controlDesktop;
     private long controlHandle;
@@ -42,9 +50,12 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        showingSessions = state != null && state.getBoolean(HOME_SESSIONS, false);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        getWindow().setDecorFitsSystemWindows(false);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         store = new DesktopStore(this);
-        backend = NativeDesktopBackend.load(this, this::updateConnectionViews);
+        backend = NativeDesktopBackend.load(this, store, this::updateConnectionViews);
         String last = getPreferences(MODE_PRIVATE).getString("selected", null);
         if (last != null) {
             try { selected = UUID.fromString(last); }
@@ -58,6 +69,11 @@ public final class MainActivity extends Activity {
         render();
     }
 
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putBoolean(HOME_SESSIONS, showingSessions);
+    }
+
     @Override public void onDestroy() {
         active = false;
         if (controlPanel != null) controlPanel.closeLocally();
@@ -69,99 +85,399 @@ public final class MainActivity extends Activity {
     }
 
     private void render() {
-        ScrollView scroll = new ScrollView(this);
-        content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int padding = (int) (24 * getResources().getDisplayMetrics().density);
-        content.setPadding(padding, padding, padding, padding);
-        scroll.setFillViewport(true);
-        scroll.addView(content);
-        setContentView(scroll);
-        text("CC Desk", 26);
-        text("远程连接 · 共享会话", 16);
-        if (backend == null) text("原生连接组件尚未接入。当前不能配对或读取远程会话。", 16);
-
-        try {
-            List<DesktopBackend.Desktop> rows = store.read();
-            rows.removeIf(row -> backend == null || !backend.verified(row));
-            if (selected != null && rows.stream().noneMatch(row -> row.localId.equals(selected))) selected = null;
-            button("全部会话", () -> select(null));
-            if (rows.isEmpty()) text("没有已批准的桌面", 16);
-            for (DesktopBackend.Desktop row : rows) {
-                button(row.name + " · " + row.hostId.substring(0, 8),
-                    () -> select(row.localId));
-            }
-            if (selected == null && backend != null && !rows.isEmpty()) {
-                button("读取各电脑的共享会话", () -> {
-                    for (DesktopBackend.Desktop row : rows) backend.loadShares(row, identities);
-                });
-            }
-            TextView heading = text(selected == null ? "全部会话" : "桌面会话", 22);
-            for (DesktopBackend.Desktop row : rows) {
-                if (selected != null && !selected.equals(row.localId)) continue;
-                if (selected != null) heading.setText(row.name + " · 仅观察");
-                try { renderDesktop(row); } catch (RuntimeException e) {
-                    text(row.name + " · 暂时不可用，请检查电脑连接", 16);
-                }
-            }
-        } catch (IOException e) {
-            text("本地桌面索引不可用。未建立任何连接。", 16);
+        if (showingSessions && lastHomeSessions && sessionBrowser != null && home.root.isAttachedToWindow()
+            && java.util.Objects.equals(lastHomeSelection, selected)) {
+            sessionBrowser.refresh();
             return;
         }
-        Button scan = button("扫码添加电脑", this::scanPairing);
-        scan.setEnabled(backend != null && !pairingPending);
-        Button manual = button("改用配对码", this::manualPairing);
-        manual.setEnabled(backend != null && !pairingPending);
-        if (pairingPending) {
-            text("请在电脑上点同意", 16);
-            button("取消配对", () -> {
-                enrollmentEpoch++; pairingPending = false; backend.cancelEnrollment(); render();
-            });
+        sessionBrowser = null;
+        RemoteHomeView previous = home;
+        int scrollY = previous != null && lastHomeSessions == showingSessions
+            && java.util.Objects.equals(lastHomeSelection, selected) ? previous.scroll.getScrollY() : 0;
+        home = new RemoteHomeView(this);
+        content = home.body;
+        home.build(showingSessions, () -> navigateHome(false), () -> navigateHome(true));
+        setContentView(home.root);
+        home.root.requestApplyInsets();
+        lastHomeSessions = showingSessions;
+        lastHomeSelection = selected;
+        try {
+            List<DesktopBackend.Desktop> rows = store.read();
+            if (selected != null && rows.stream().noneMatch(row -> row.localId.equals(selected))) selected = null;
+            if (showingSessions) renderSessions(rows);
+            else renderDevices(rows);
+        } catch (IOException e) {
+            LinearLayout card = home.card(content);
+            home.title(card, "无法读取设备", 19, true);
+            home.body(card, "本机保存的设备暂不可用，没有发起连接。", 15);
+            home.action(card, "重试", true, this::render);
         }
+        if (scrollY > 0) {
+            RemoteHomeView shown = home;
+            shown.scroll.post(() -> { if (home == shown) shown.scroll.scrollTo(0, scrollY); });
+        }
+    }
+
+    private void navigateHome(boolean sessions) {
+        if (showingSessions == sessions) return;
+        showingSessions = sessions;
+        render();
+    }
+
+    private void renderDevices(List<DesktopBackend.Desktop> rows) {
+        home.title(content, "设备", 28, true);
+        home.body(content, "管理已配对的电脑。断开连接不会移除设备。", 15);
+        if (backend == null) home.body(content, "本版本没有可用的连接组件，仍可查看本机记录。", 15);
+        if (pairingPending) {
+            LinearLayout card = home.card(content);
+            home.title(card, "等待电脑确认", 20, true);
+            home.status(card, "已发起配对", true);
+            home.body(card, "在电脑的远程连接页同意这次请求。本机验证并保存凭据后才算配对完成。", 15);
+            home.action(card, "取消配对", false, () -> {
+                enrollmentEpoch++;
+                pairingPending = false;
+                pairingNotice = PairingNotice.NONE;
+                backend.cancelEnrollment();
+                render();
+            });
+        } else {
+            LinearLayout card = home.card(content);
+            if (pairingNotice == PairingNotice.FAILED) {
+                home.title(card, "配对未完成", 20, true);
+                home.body(card, "请检查电脑和中转是否可用。若邀请已过期或被拒绝，请在电脑上创建新的邀请后重试。", 15);
+            } else if (pairingNotice == PairingNotice.SAVED) {
+                home.title(card, "已配对并保存", 20, true);
+                home.body(card, "可以在设备卡片中查看会话。是否有内容取决于电脑的共享授权。", 15);
+            } else if (rows.isEmpty()) {
+                home.title(card, "配对第一台电脑", 20, true);
+                home.body(card, "在电脑的远程连接页创建邀请，用手机扫描二维码或输入配对码。", 15);
+            }
+            home.action(card, "添加电脑", true, this::showPairingOptions).setEnabled(backend != null);
+        }
+        for (DesktopBackend.Desktop row : rows) {
+            LinearLayout card = home.card(content);
+            String name = displayName(rows, row);
+            home.title(card, name, 20, true);
+            if (canUseDesktop(row)) {
+                DesktopBackend.State state = backend.state(row);
+                home.status(card, deviceStatus(state), isEngaged(state));
+            } else {
+                home.status(card, "已保存 · 配对凭据尚未验证", false);
+                home.body(card, "凭据验证前无法查看远程会话。", 15);
+            }
+            if (canUseDesktop(row) && backend.state(row) != DesktopBackend.State.REVOKED) {
+                home.action(card, "查看会话", true, () -> {
+                    select(row.localId);
+                    refreshDesktop(row);
+                }).setContentDescription("查看 " + name + " 的会话");
+            }
+            home.action(card, "设备设置", false, () -> editDesktopAlias(row, name))
+                .setContentDescription("打开 " + name + " 的设备设置");
+        }
+    }
+
+    private void showPairingOptions() {
+        if (backend == null || pairingPending || scanOwner != null) return;
+        new AlertDialog.Builder(this)
+            .setTitle("添加电脑")
+            .setMessage("在电脑的远程连接页创建邀请。扫描二维码会自动填写连接信息；也可以手动输入配对码。")
+            .setPositiveButton("扫描二维码", (dialog, which) -> scanPairing())
+            .setNeutralButton("输入配对码", (dialog, which) -> manualPairing())
+            .setNegativeButton("取消", null).show();
+    }
+
+    private void renderSessions(List<DesktopBackend.Desktop> rows) {
+        sessionBrowser = new SessionBrowser(rows);
+    }
+
+    private final class SessionBrowser {
+        private List<DesktopBackend.Desktop> rows;
+        private final Button scope;
+        private final Button refreshButton;
+        private final EditText search;
+        private final Button clear;
+        private final LinearLayout searchRow;
+        private final TextView searchCoverage;
+        private final LinearLayout results;
+
+        SessionBrowser(List<DesktopBackend.Desktop> rows) {
+            this.rows = rows;
+            home.title(content, "会话", 28, true);
+            scope = home.action(content, "全部电脑", false, () -> chooseSessionDevice(this.rows));
+            refreshButton = home.action(content, "刷新会话", true, this::refreshSelected);
+            searchRow = new LinearLayout(MainActivity.this);
+            searchRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            search = new EditText(MainActivity.this);
+            search.setHint("搜索电脑或会话标题");
+            search.setSingleLine(true);
+            search.setSaveEnabled(false);
+            search.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+            search.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+            search.setFilters(new android.text.InputFilter[] { new android.text.InputFilter.LengthFilter(80) });
+            searchRow.addView(search, new LinearLayout.LayoutParams(0, -2, 1));
+            clear = new Button(MainActivity.this);
+            clear.setText("清除");
+            clear.setContentDescription("清除会话搜索");
+            clear.setMinHeight(Math.round(48 * getResources().getDisplayMetrics().density));
+            clear.setOnClickListener(unused -> search.setText(""));
+            searchRow.addView(clear);
+            content.addView(searchRow);
+            searchCoverage = home.body(content, "", 14);
+            results = new LinearLayout(MainActivity.this);
+            results.setOrientation(LinearLayout.VERTICAL);
+            content.addView(results);
+            search.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
+                    if (sessionBrowser == SessionBrowser.this) renderResults(false);
+                }
+                @Override public void afterTextChanged(android.text.Editable value) {}
+            });
+            renderResults(false);
+        }
+
+        private boolean canRefreshRow(DesktopBackend.Desktop row) {
+            return (selected == null || selected.equals(row.localId)) && canUseDesktop(row) && canRefresh(backend.state(row));
+        }
+
+        private void refreshSelected() {
+            for (DesktopBackend.Desktop row : rows) {
+                if (canRefreshRow(row)) refreshDesktop(row);
+            }
+        }
+
+        void refresh() {
+            try {
+                rows = store.read();
+                if (selected != null && rows.stream().noneMatch(row -> row.localId.equals(selected))) selected = null;
+                lastHomeSelection = selected;
+                renderResults(true);
+            } catch (IOException denied) {
+                rows = java.util.Collections.emptyList();
+                setToolbarVisible(false);
+                results.removeAllViews();
+                LinearLayout card = home.card(results);
+                home.title(card, "无法读取设备", 19, true);
+                home.body(card, "未发起远程连接。", 15);
+                home.action(card, "重试", true, this::refresh);
+            }
+        }
+
+        private void setToolbarVisible(boolean visible) {
+            scope.setVisibility(visible ? android.view.View.VISIBLE : android.view.View.GONE);
+            refreshButton.setVisibility(visible && rows.stream().anyMatch(this::canRefreshRow)
+                ? android.view.View.VISIBLE : android.view.View.GONE);
+            searchRow.setVisibility(visible ? android.view.View.VISIBLE : android.view.View.GONE);
+            if (!visible) searchCoverage.setVisibility(android.view.View.GONE);
+        }
+
+        private void renderSearchCoverage(String query, SessionSearchCoverage coverage) {
+            if (query.isEmpty()) {
+                searchCoverage.setVisibility(android.view.View.GONE);
+                return;
+            }
+            StringBuilder text = new StringBuilder("只搜索已读取的标题和本机设备名称，不包含全部历史。");
+            if (coverage.isPartial()) {
+                appendCoverage(text, coverage.count(SessionSearchCoverage.Device.LOADING), " 台设备正在读取或连接");
+                appendCoverage(text, coverage.count(SessionSearchCoverage.Device.NOT_CONNECTED), " 台设备未连接或列表不可用");
+                appendCoverage(text, coverage.count(SessionSearchCoverage.Device.UNVERIFIED), " 台设备的配对凭据未验证");
+                appendCoverage(text, coverage.count(SessionSearchCoverage.Device.ACTIVE_ONLY), " 台设备仅显示当前会话");
+            }
+            searchCoverage.setText(text);
+            searchCoverage.setVisibility(android.view.View.VISIBLE);
+        }
+
+        private void appendCoverage(StringBuilder text, int count, String suffix) {
+            if (count > 0) text.append('\n').append(count).append(suffix);
+        }
+
+        private void renderResults(boolean preserveScroll) {
+            RemoteHomeView page = home;
+            int savedScroll = page.scroll.getScrollY();
+            setToolbarVisible(!rows.isEmpty());
+            results.removeAllViews();
+            if (rows.isEmpty()) {
+                LinearLayout card = home.card(results);
+                home.title(card, "还没有可查看的会话", 20, true);
+                home.body(card, "先配对电脑，再按电脑上的共享授权查看会话。", 15);
+                home.action(card, "去配对电脑", true, () -> navigateHome(false));
+                return;
+            }
+            DesktopBackend.Desktop chosen = rows.stream().filter(row -> row.localId.equals(selected))
+                .findFirst().orElse(null);
+            scope.setText(chosen == null ? "全部电脑 ▾" : displayName(rows, chosen) + " ▾");
+            scope.setContentDescription(chosen == null ? "筛选电脑：全部" : "筛选电脑：" + displayName(rows, chosen));
+            boolean hasText = search.length() > 0;
+            clear.setVisibility(hasText ? android.view.View.VISIBLE : android.view.View.GONE);
+            String query = SessionTitleFilter.normalize(search.getText());
+            SessionSearchCoverage coverage = new SessionSearchCoverage();
+            boolean matched = false;
+            for (DesktopBackend.Desktop row : rows) {
+                if (selected != null && !selected.equals(row.localId)) continue;
+                String name = displayName(rows, row);
+                try { matched |= renderDesktop(results, row, name, query, coverage); }
+                catch (RuntimeException denied) {
+                    coverage.add(SessionSearchCoverage.Device.NOT_CONNECTED);
+                    if (!SessionTitleFilter.matches(query, name, null)) continue;
+                    matched = true;
+                    LinearLayout card = home.card(results);
+                    home.title(card, name, 19, true);
+                    home.body(card, "暂时无法读取，请返回设备页查看状态。", 15);
+                }
+            }
+            renderSearchCoverage(query, coverage);
+            if (!matched && !query.isEmpty()) {
+                LinearLayout card = home.card(results);
+                home.title(card, coverage.isPartial() ? "已读取的标题中没有匹配" : "没有匹配的会话", 19, true);
+                home.body(card, "只搜索此范围内的电脑名称和当前可见的会话标题。", 15);
+                home.action(card, "清除搜索", false, () -> search.setText(""));
+            }
+            if (preserveScroll && savedScroll > 0) {
+                page.scroll.post(() -> {
+                    if (home == page && sessionBrowser == this && query.equals(SessionTitleFilter.normalize(search.getText())))
+                        page.scroll.scrollTo(0, savedScroll);
+                });
+            }
+        }
+    }
+
+    private void chooseSessionDevice(List<DesktopBackend.Desktop> rows) {
+        String[] labels = new String[rows.size() + 1];
+        labels[0] = "全部电脑";
+        int checked = 0;
+        for (int i = 0; i < rows.size(); i++) {
+            labels[i + 1] = displayName(rows, rows.get(i));
+            if (rows.get(i).localId.equals(selected)) checked = i + 1;
+        }
+        new AlertDialog.Builder(this).setTitle("会话范围")
+            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                dialog.dismiss();
+                select(which == 0 ? null : rows.get(which - 1).localId);
+            }).setNegativeButton("取消", null).show();
     }
 
     private void select(UUID localId) {
         selected = localId;
+        showingSessions = true;
         if (localId == null) getPreferences(MODE_PRIVATE).edit().remove("selected").apply();
         else getPreferences(MODE_PRIVATE).edit().putString("selected", localId.toString()).apply();
         render();
     }
 
-    private void renderDesktop(DesktopBackend.Desktop desktop) {
-        DesktopBackend.State state = backend == null ? DesktopBackend.State.UNAVAILABLE : backend.state(desktop);
-        String source = desktop.name + " · " + desktop.hostId.substring(0, 8);
-        text(source + " · " + label(state), 18);
-        if (backend != null && (state == DesktopBackend.State.DISCONNECTED ||
-            state == DesktopBackend.State.UNAVAILABLE)) {
-            button("查看可用会话",
-                () -> backend.loadShares(desktop, identities));
+    private String displayName(List<DesktopBackend.Desktop> rows, DesktopBackend.Desktop desktop) {
+        // 兼容已经保存的旧版默认名，但不在首页露出身份摘要。
+        return desktop.name.equals("电脑 " + desktop.hostId.substring(0, 8))
+            ? "电脑 " + (rows.indexOf(desktop) + 1) : desktop.name;
+    }
+
+    private boolean canUseDesktop(DesktopBackend.Desktop desktop) {
+        return backend != null && backend.verified(desktop);
+    }
+
+    private boolean canRefresh(DesktopBackend.State state) {
+        return state == DesktopBackend.State.DISCONNECTED || state == DesktopBackend.State.UNAVAILABLE;
+    }
+
+    private void refreshDesktop(DesktopBackend.Desktop desktop) {
+        if (canUseDesktop(desktop) && canRefresh(backend.state(desktop))) backend.loadShares(desktop, identities);
+    }
+
+    private boolean isEngaged(DesktopBackend.State state) {
+        return state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.CONTROLLING;
+    }
+
+    private String deviceStatus(DesktopBackend.State state) {
+        return state == DesktopBackend.State.DISCONNECTED ? "已配对 · 未连接" : label(state);
+    }
+
+    private SessionSearchCoverage.Device searchCoverageFor(DesktopBackend.State state) {
+        switch (state) {
+            case SHARES_READY:
+                return SessionSearchCoverage.Device.LOADED;
+            case OBSERVING:
+            case CONTROLLING:
+                return SessionSearchCoverage.Device.ACTIVE_ONLY;
+            case WAITING_FOR_DESKTOP:
+            case LOADING_SHARES:
+            case AWAITING_OBSERVER:
+                return SessionSearchCoverage.Device.LOADING;
+            default:
+                return SessionSearchCoverage.Device.NOT_CONNECTED;
         }
-        if (state == DesktopBackend.State.SHARES_READY) {
-            List<DesktopBackend.Offer> offers = backend.shareOffers(desktop);
-            button("关闭会话列表", () -> backend.disconnectObserver(desktop));
-            if (offers.isEmpty()) text("电脑没有共享会话，请在电脑上开启共享。", 15);
-            for (DesktopBackend.Offer offer : offers) {
-                String purpose = offer.role == DesktopBackend.Role.CONTROLLER ? "请求控制" : "查看";
-                button(purpose + " · " + offer.label + " · " + source, () -> backend.chooseShare(desktop, offer));
-            }
+    }
+
+    private boolean renderDesktop(LinearLayout target, DesktopBackend.Desktop desktop, String name,
+            String query, SessionSearchCoverage coverage) {
+        boolean nameMatches = SessionTitleFilter.matches(query, name, null);
+        if (!canUseDesktop(desktop)) {
+            coverage.add(SessionSearchCoverage.Device.UNVERIFIED);
+            if (!nameMatches) return false;
+            LinearLayout card = home.card(target);
+            home.title(card, name, 20, true);
+            home.status(card, "已保存 · 配对凭据尚未验证", false);
+            return true;
         }
-        if (state == DesktopBackend.State.CONTROLLING) {
-            button("打开控制台 · " + source, () -> openControl(desktop, source));
-            button("停止控制", () -> backend.disconnectObserver(desktop));
+        DesktopBackend.State state = backend.state(desktop);
+        List<DesktopBackend.Offer> offers = state == DesktopBackend.State.SHARES_READY
+            ? backend.shareOffers(desktop) : java.util.Collections.emptyList();
+        List<DesktopBackend.Session> snapshots = state == DesktopBackend.State.OBSERVING
+            ? backend.observerSessions(desktop) : java.util.Collections.emptyList();
+        boolean matched = nameMatches
+            || offers.stream().anyMatch(offer -> SessionTitleFilter.matches(query, name, offer.label))
+            || snapshots.stream().anyMatch(session -> SessionTitleFilter.matches(query, name, session.title));
+        boolean hasLiveAction = isEngaged(state) || state == DesktopBackend.State.LOADING_SHARES
+            || state == DesktopBackend.State.AWAITING_OBSERVER;
+        SessionSearchCoverage.Device coverageState = searchCoverageFor(state);
+        if (!matched && !hasLiveAction) {
+            coverage.add(coverageState);
+            return false;
         }
-        if (state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.AWAITING_OBSERVER ||
-            state == DesktopBackend.State.LOADING_SHARES) {
-            button(state == DesktopBackend.State.OBSERVING ? "停止查看" : "取消", () ->
-                backend.disconnectObserver(desktop));
+
+        LinearLayout card = home.card(target);
+        home.title(card, name, 20, true);
+        home.status(card, deviceStatus(state), isEngaged(state));
+        switch (state) {
+            case DISCONNECTED:
+            case UNAVAILABLE:
+                home.body(card, "刷新以检查这台电脑可用的会话。", 15);
+                home.action(card, "刷新这台电脑", false, () -> refreshDesktop(desktop));
+                break;
+            case SHARES_READY:
+                if (offers.isEmpty()) home.body(card, "没有可查看的会话。请检查电脑上的共享设置。", 15);
+                for (DesktopBackend.Offer offer : offers) {
+                    if (!SessionTitleFilter.matches(query, name, offer.label)) continue;
+                    boolean controller = offer.role == DesktopBackend.Role.CONTROLLER;
+                    home.title(card, offer.label, 16, false);
+                    home.action(card, controller ? "请求控制" : "查看快照", true,
+                        () -> backend.chooseShare(desktop, offer)).setContentDescription(
+                            (controller ? "请求控制 " : "查看快照 ") + offer.label + "，" + name);
+                }
+                home.action(card, "关闭会话列表", false, () -> backend.disconnectObserver(desktop));
+                break;
+            case CONTROLLING:
+                home.action(card, "打开控制台", true, () -> openControl(desktop, name));
+                home.action(card, "停止控制", false, () -> backend.disconnectObserver(desktop));
+                break;
+            case LOADING_SHARES:
+            case AWAITING_OBSERVER:
+                home.action(card, "取消", false, () -> backend.disconnectObserver(desktop));
+                break;
+            case OBSERVING:
+                home.action(card, "停止查看", false, () -> backend.disconnectObserver(desktop));
+                for (DesktopBackend.Session session : snapshots) {
+                    if (!SessionTitleFilter.matches(query, name, session.title)) continue;
+                    // 来源始终与所属电脑绑定，不按会话 ID 跨主机合并。
+                    home.title(card, session.title, 16, true);
+                    home.body(card, "仅当前快照，不会自动更新。", 14);
+                    TextView snapshot = home.title(card, session.text, 14, false);
+                    snapshot.setTypeface(android.graphics.Typeface.MONOSPACE);
+                }
+                break;
+            default:
+                break;
         }
-        if (state != DesktopBackend.State.OBSERVING) return;
-        for (DesktopBackend.Session session : backend.observerSessions(desktop)) {
-            // 来源始终与行绑定，不按照会话 ID 跨主机合并。
-            text(session.title + " · " + source, 16);
-            text("这是获取时的会话内容，不会自动更新。", 14);
-            TextView snapshot = text(session.text, 14);
-            snapshot.setTypeface(android.graphics.Typeface.MONOSPACE);
-        }
+        coverage.add(coverageState);
+        return matched;
     }
 
     private void openControl(DesktopBackend.Desktop desktop, String source) {
@@ -180,6 +496,7 @@ public final class MainActivity extends Activity {
                 @Override public void leave() { leaveControl(true); }
             });
         setContentView(controlPanel);
+        controlPanel.requestApplyInsets();
         updateConnectionViews();
     }
 
@@ -188,16 +505,45 @@ public final class MainActivity extends Activity {
         DesktopBackend.Desktop desktop = controlDesktop;
         long original = controlHandle;
         if (backend.controlHandle(desktop) != original) {
+            DesktopBackend.State last = backend.state(desktop);
+            boolean unconfirmed = controlPanel.hasUnconfirmedInput();
             leaveControl(false);
-            text("控制已结束，输入未自动重发。", 16);
+            showControlEnded(desktop, last, unconfirmed);
             return;
         }
         List<DesktopBackend.Session> updates = backend.observerSessions(desktop);
         DesktopBackend.Session frame = updates.isEmpty() ? null : updates.get(0);
         boolean ready = backend.controllerReady(desktop, original);
-        controlPanel.update(frame == null ? "" : frame.text, ready, ready ? "可以输入" : "等待电脑画面");
+        controlPanel.update(frame == null ? "" : frame.text, ready, ready ? "已连接，可以输入" : "等待电脑确认并同步输出");
         if (frame != null && frame.frameId > 0)
             backend.confirmDisplayedFrame(desktop, original, frame.frameId);
+    }
+
+    private void showControlEnded(DesktopBackend.Desktop desktop, DesktopBackend.State last,
+            boolean unconfirmed) {
+        if (!active || isFinishing()) return;
+        boolean revoked = last == DesktopBackend.State.REVOKED;
+        String message = revoked
+            ? "这台电脑已撤销控制权限。需要在电脑上重新授权。"
+            : last == DesktopBackend.State.DISCONNECTED
+                ? "与这台电脑的连接已断开。可以重新读取共享会话。"
+                : "暂时无法继续控制。请检查网络、电脑是否在线，以及电脑是否仍允许共享。";
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+            .setTitle(revoked ? "权限已撤销" : "控制连接已结束")
+            .setMessage(message + (unconfirmed
+                ? "\n无法确认最后一次输入是否送达。请先在电脑核对，不要重复发送。"
+                : "\n已清除旧画面和草稿，未自动重发输入。"))
+            .setNegativeButton("返回会话", null);
+        if ((last == DesktopBackend.State.DISCONNECTED || last == DesktopBackend.State.UNAVAILABLE)
+            && canUseDesktop(desktop)) {
+            dialog.setPositiveButton("读取可用会话", (ignored, button) -> {
+                if (!active || !canUseDesktop(desktop)) return;
+                DesktopBackend.State current = backend.state(desktop);
+                if (current == DesktopBackend.State.DISCONNECTED || current == DesktopBackend.State.UNAVAILABLE)
+                    backend.loadShares(desktop, identities);
+            });
+        }
+        dialog.show();
     }
 
     private void leaveControl(boolean disconnect) {
@@ -219,17 +565,48 @@ public final class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (controlPanel != null) leaveControl(true);
+        else if (showingSessions) navigateHome(false);
         else super.onBackPressed();
     }
 
+    private void editDesktopAlias(DesktopBackend.Desktop desktop, String displayName) {
+        EditText input = new EditText(this);
+        input.setSingleLine();
+        input.setSaveEnabled(false);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setHint("仅保存在这部手机");
+        input.setText(displayName);
+        input.selectAll();
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("设备设置")
+            .setMessage("别名仅保存在本机，不会更改电脑上的名称或共享授权。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存", null).create();
+        dialog.setOnShowListener(unused -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            .setOnClickListener(view -> {
+                try {
+                    store.renameAlias(desktop, input.getText().toString());
+                    dialog.dismiss();
+                    render();
+                } catch (IllegalArgumentException invalid) {
+                    input.setError("请输入 1–100 字符的别名，不含换行或控制字符。");
+                } catch (IOException | RuntimeException failure) {
+                    input.setError("未保存。请返回设备列表后再试。");
+                }
+            }));
+        dialog.show();
+        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+
     private void manualPairing() {
-        if (backend == null) return;
+        if (backend == null || pairingPending) return;
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         EditText relay = new EditText(this);
         relay.setSingleLine();
         relay.setSaveEnabled(false);
-        relay.setHint("中转地址");
+        relay.setHint("从电脑复制中转地址");
         try {
             for (DesktopBackend.Desktop desktop : store.read())
                 if (desktop.localId.equals(selected)) relay.setText(desktop.relay.toString());
@@ -240,27 +617,55 @@ public final class MainActivity extends Activity {
         code.setSaveEnabled(false);
         code.setHint("粘贴电脑显示的完整配对码");
         code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        form.addView(relay);
-        form.addView(code);
+        addPairingField(form, "中转地址", relay);
+        addPairingField(form, "配对码", code);
+        relay.setNextFocusForwardId(code.getId());
+        relay.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
+            | android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+        code.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            | android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("配对桌面")
-            .setView(form).setNegativeButton("取消", null).setPositiveButton("请求桌面批准", null).create();
+            .setView(pairingDialogContent(form)).setNegativeButton("取消", null).setPositiveButton("请求桌面批准", null).create();
         dialog.setOnDismissListener(unused -> code.getText().clear());
-        dialog.show();
         dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        dialog.show();
+        if (relay.length() == 0) relay.requestFocus(); else code.requestFocus();
+        code.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId != android.view.inputmethod.EditorInfo.IME_ACTION_DONE) return false;
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            return true;
+        });
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(unused -> {
             final URI locator;
             try { locator = DesktopBackend.Desktop.checkedRelay(relay.getText().toString().trim()); }
-            catch (IllegalArgumentException e) { relay.setError("请输入有效的中转地址，可从电脑版复制"); return; }
+            catch (IllegalArgumentException e) { relay.requestFocus(); relay.setError("请输入有效的中转地址，可从电脑版复制"); return; }
             final PairingInvite invite;
             try { invite = PairingInvite.fromPasted(locator, code.getText()); }
-            catch (IllegalArgumentException e) { code.setError("请粘贴电脑显示的完整配对码"); return; }
+            catch (IllegalArgumentException e) { code.requestFocus(); code.setError("请粘贴电脑显示的完整配对码"); return; }
             dialog.dismiss();
             confirm(invite);
         });
     }
 
+    private void addPairingField(LinearLayout form, String caption, EditText input) {
+        input.setId(android.view.View.generateViewId());
+        input.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO);
+        TextView label = home.title(form, caption, 15, false);
+        label.setLabelFor(input.getId());
+        form.addView(input, new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    private ScrollView pairingDialogContent(LinearLayout content) {
+        int padding = Math.round(20 * getResources().getDisplayMetrics().density);
+        content.setPadding(padding, padding / 2, padding, padding / 2);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
+        return scroll;
+    }
+
     private void scanPairing() {
-        if (backend == null) return;
+        if (backend == null || pairingPending || scanOwner != null) return;
         scanOwner = ScanMailbox.start();
         startActivityForResult(new Intent(this, ScanActivity.class)
             .putExtra(ScanActivity.SCAN_OWNER, scanOwner.toString()), 401);
@@ -297,7 +702,7 @@ public final class MainActivity extends Activity {
         confirmation.addView(details);
         confirmation.addView(detailText);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("确认添加这台电脑")
-            .setView(confirmation)
+            .setView(pairingDialogContent(confirmation))
             .setNegativeButton("取消", null)
             .setPositiveButton("请求电脑批准", (unused, button) -> redeem(invite)).create();
         dialog.setOnDismissListener(unused -> {
@@ -311,28 +716,17 @@ public final class MainActivity extends Activity {
 
     private void redeem(PairingInvite invite) {
         long epoch = ++enrollmentEpoch;
+        pairingNotice = PairingNotice.NONE;
         pairingPending = true;
         render();
         DesktopBackend.EnrollmentCallback completion = new DesktopBackend.EnrollmentCallback() {
             @Override public void approved(DesktopBackend.Desktop desktop) {
                 runOnUiThread(() -> {
-                    if (!active || epoch != enrollmentEpoch) {
-                        backend.discardUnpublished(desktop);
-                        return;
-                    }
+                    if (!active || epoch != enrollmentEpoch) return;
                     enrollmentEpoch++;
                     pairingPending = false;
+                    pairingNotice = PairingNotice.SAVED;
                     render();
-                    if (!invite.matchesHost(desktop.hostId) || !invite.relay.equals(desktop.relay)) {
-                        backend.discardUnpublished(desktop);
-                        text("电脑身份不一致，请重新扫码。", 16);
-                        return;
-                    }
-                    try { store.addApproved(desktop); select(desktop.localId); }
-                    catch (IOException e) {
-                        backend.discardUnpublished(desktop);
-                        text("批准结果未保存，未显示为已配对。", 16);
-                    }
                 });
             }
             @Override public void state(DesktopBackend.State state) {
@@ -340,8 +734,8 @@ public final class MainActivity extends Activity {
                     if (!active || epoch != enrollmentEpoch) return;
                     if (state != DesktopBackend.State.WAITING_FOR_DESKTOP) {
                         pairingPending = false;
+                        pairingNotice = PairingNotice.FAILED;
                         render();
-                        text("没有完成配对，请确认电脑在线并重新扫码。", 16);
                     }
                 });
             }
