@@ -101,7 +101,8 @@ async function prepare() {
   assert(plain(apk) <= 96 * 1024 * 1024 && await digestFile(apk) === proof.signedSha256, 'candidate APK does not match signing proof bytes')
   const bt = join(process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || '', 'build-tools', '35.0.0')
   assert(resolve(bt) !== resolve('build-tools', '35.0.0'), 'Android SDK not configured')
-  const apkOutput = execFileSync(join(bt, 'apksigner'), ['verify','--verbose','--print-certs','--min-sdk-version','31',apk], { encoding:'utf8' })
+  // 用 API 27 验签才能实际覆盖 v2 和 v3；不改变安装最低 API 31。
+  const apkOutput = execFileSync(join(bt, 'apksigner'), ['verify','--verbose','--print-certs','--min-sdk-version','27',apk], { encoding:'utf8' })
   verifyAndroidSignature(apkOutput, expected.signer)
   execFileSync(join(bt, 'zipalign'), ['-c','-P','16','4',apk], { stdio:'inherit' })
   const windows = join('artifacts', 'cc-desk-candidate-' + expected.sha + '-windows')

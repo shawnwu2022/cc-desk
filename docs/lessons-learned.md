@@ -147,3 +147,9 @@ Lxx 标题
 ### RC4: pass protected environment secrets by name into reusable workflows
 
 The desktop Release caller omitted named forwarding, so the Android signer received empty inputs even though all three secrets existed before dispatch. Keep the values only in the protected signing environment, declare each named input in the reusable workflow, and pass exactly those three names from the caller. Do not inherit unrelated repository secrets. Required inputs check the mapping; the signer still verifies values and certificate identity.
+
+## Android 验签范围要覆盖两种签名
+
+- RC4 第二次运行已成功签名并匹配固定证书，但 apksigner 以 API 31 为验证下限时，有 v3 就不检查 v2。Build Tools 35.0.0 的一次性本机签名夹具复现：API 31 仅 v3；同一 APK 用 API 27 验证，两者均通过。
+- 构建方和发布方都以 API 27 为验签下限，并继续要求 v2、v3、单签名者和固定证书；APK 的安装下限和签名配置仍为 API 31。
+- 证据：[失败任务](https://github.com/shawnwu2022/cc-desk/actions/runs/45738804191/job/139642625304)；回归：node --test tests/scripts/releaseCombinedMobile.node.mjs。
