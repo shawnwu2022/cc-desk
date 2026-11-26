@@ -153,3 +153,8 @@ The desktop Release caller omitted named forwarding, so the Android signer recei
 - RC4 第二次运行已成功签名并匹配固定证书，但 apksigner 以 API 31 为验证下限时，有 v3 就不检查 v2。Build Tools 35.0.0 的一次性本机签名夹具复现：API 31 仅 v3；同一 APK 用 API 27 验证，两者均通过。
 - 构建方和发布方都以 API 27 为验签下限，并继续要求 v2、v3、单签名者和固定证书；APK 的安装下限和签名配置仍为 API 31。
 - 证据：[失败任务](https://github.com/shawnwu2022/cc-desk/actions/runs/45738804191/job/139642625304)；回归：node --test tests/scripts/releaseCombinedMobile.node.mjs。
+
+## 合并发布的产物清单要跟生产路径一致
+
+- RC4 的桌面三端与 Android 已签名，但发布脚本仍只接受三个桌面产物，导致发布前复核拒绝同运行的第四个产物。证据：[发布任务日志](https://github.com/shawnwu2022/cc-desk/actions/runs/45746545884/job/139675056092)。
+- 回归用发布命令实际核对完整清单：桌面版严格三个；合并测试版严格三个桌面加一个 Android，其名称、产物 ID、提交、运行和尝试次数必须匹配。不得过滤掉未知产物来凑数量。产物清单校验仍不能替代下载后的真实验签。

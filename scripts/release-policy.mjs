@@ -59,13 +59,19 @@ export function mayPublish(context) {
   return requiredChecksPassed(context) && coverageChecksPassed(context)
 }
 
-export function validateArtifacts(artifacts, sha, runId) {
+export function validateArtifacts(artifacts, sha, runId, android) {
   const names = ['windows', 'macos', 'linux'].map(platform => `cc-desk-candidate-${sha}-${platform}`)
-  if (!Array.isArray(artifacts) || artifacts.length !== 3) throw new Error('expected exactly three platform artifacts')
+  const androidName = android && `android-candidate-${sha}-${runId}-${android.attempt}`
+  if (androidName) names.push(androidName)
+  if (!Array.isArray(artifacts) || artifacts.length !== names.length) {
+    throw new Error(androidName ? 'expected exactly three desktop artifacts and one Android artifact' : 'expected exactly three platform artifacts')
+  }
+  if (androidName && artifacts.filter(a => a.id === android.id).length !== 1) throw new Error('invalid or duplicate Android artifact ID')
   for (const name of names) {
     const matches = artifacts.filter(a => a.name === name)
     if (matches.length !== 1) throw new Error(`missing or duplicate artifact: ${name}`)
     const artifact = matches[0]
+    if (name === androidName && artifact.id !== android.id) throw new Error('Android artifact ID does not match the signing job output')
     if (artifact.publishable === false || artifact.updaterPublication === false || ['candidate', 'test-only'].includes(artifact.channel)
       || artifact.expired !== false || artifact.workflow_run?.id !== runId || artifact.workflow_run?.head_sha !== sha || artifact.workflow_run?.head_branch !== 'main') {
       throw new Error(`artifact source/run binding failed: ${name}`)
