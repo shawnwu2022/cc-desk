@@ -3,6 +3,13 @@ name: Android production candidate
 on:
   workflow_dispatch:
   workflow_call:
+    secrets:
+      ANDROID_RELEASE_KEYSTORE_B64:
+        required: true
+      ANDROID_RELEASE_KEYSTORE_PASSWORD:
+        required: true
+      ANDROID_RELEASE_KEY_PASSWORD:
+        required: true
     outputs:
       artifact_id:
         value: ${{ jobs.android.outputs.artifact_id }}

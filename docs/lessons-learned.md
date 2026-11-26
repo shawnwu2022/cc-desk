@@ -142,3 +142,8 @@ Lxx 标题
 - **现象**：RC4 的桌面三端构建和发布预检通过，但 GitHub 未创建 Android 签名任务。运行注释显示调用方在求值可复用工作流输入时拒绝了实际的 28004。此时没有待审记录，也未读取签名材料。
 - **防再犯**：手动 Release 和 Android 的两个入口统一用字符串传递；原发行版号检查仍限制为无前导零的正整数及既有上限。不要因父流程已经把值放入环境变量，就假定可复用工作流输入也已通过。
 - **证据**：[RC4 Release 运行注释](https://github.com/shawnwu2022/cc-desk/actions/runs/45633115193)；本地最小回归为 tests/scripts/releaseCombinedMobile.node.mjs，真正启动签名任务仍由新运行确认。
+
+
+### RC4: pass protected environment secrets by name into reusable workflows
+
+The desktop Release caller omitted named forwarding, so the Android signer received empty inputs even though all three secrets existed before dispatch. Keep the values only in the protected signing environment, declare each named input in the reusable workflow, and pass exactly those three names from the caller. Do not inherit unrelated repository secrets. Required inputs check the mapping; the signer still verifies values and certificate identity.
