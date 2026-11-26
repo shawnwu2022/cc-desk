@@ -125,3 +125,16 @@ for (const version of ['0.27.0-beta.1', '0.27.0-preview.1']) {
     }
   })
 }
+
+test('ReleaseBuildAdmission_CurrentReleaseHighlights_021', () => {
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8')
+  const earlyJob = workflow.split(/\r?\n  preflight:/)[0]
+  assert.match(earlyJob, /run: node scripts\/release-notes\.js check-current/)
+  const result = spawnSync(process.execPath, ['scripts/release-notes.js', 'check-current'], { cwd: root, encoding: 'utf8' })
+  assert.ifError(result.error)
+  assert.equal(result.status, 0, result.stderr)
+  const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
+  for (const file of ['RELEASE_NOTES.md', 'RELEASE_NOTES_CN.md']) {
+    assert.ok(readFileSync(join(root, file), 'utf8').includes('## [' + version + ']'), file)
+  }
+})

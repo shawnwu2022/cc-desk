@@ -42,6 +42,9 @@ jobs:
         env:
           CC_DESK_RELEASE_VERSION: ${{ steps.source.outputs.version }}
         run: node scripts/release-combined-mobile.mjs admit
+      - name: Require versioned release highlights before building or signing
+        if: steps.source.outputs.mobile_release == 'true'
+        run: node scripts/release-notes.js check-current
 
   preflight:
     needs: [admission, build]

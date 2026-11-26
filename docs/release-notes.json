@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "0.28.0-rc.4": {
+      "en": "Added\n\n- The Windows desktop app has a dedicated Remote Connections view for first-time setup, Android pairing, and sharing or stopping an explicitly selected CC Desk session.\n- The native Android app pairs by QR code or pairing code, lists shared sessions across paired computers, and provides live output, single-line input, and common terminal keys.\n- Read-only viewing and desktop-approved control are separate. Control is limited to the selected device and session and ends on expiry or revocation. Input with uncertain delivery is not automatically resent.\n\nImportant\n\n- This is a test-channel prerelease. Stable Latest and the production relay are unchanged. It is not a general-purpose remote desktop or device administration tool; multi-line paste is not enabled.\n- Physical Android enrollment and the production relay route have not been verified end to end.",
+      "zh": "新增\n\n- Windows 桌面端新增独立的「远程连接」页面，可完成首次设置、配对 Android，以及共享或停止共享指定的 CC Desk 会话。\n- 原生 Android 客户端支持扫码或配对码配对，可查看多台已配对电脑的共享会话、实时输出，并发送单行输入和常用终端按键。\n- 只读查看和控制权限分开。控制须经桌面端批准，仅对指定设备和会话有效，到期或撤销即停止。发送结果不确定时不会自动重发。\n\n重要说明\n\n- 本次仅发布测试版，不改变稳定版更新通道或生产中转。不提供通用远程桌面、设备管理或多行粘贴。\n- Android 真机配对和生产中转链路尚未完成端到端验证。"
+    },
     "0.28.0-rc.3": {
       "en": "Changed\n\n- Standard Windows, macOS and Linux packages are desktop-only and exclude the remote Host and browser runtime assets. Experimental remote access remains separate.\n- Release validation installs the exact updater-signed Windows NSIS package on a disposable hosted runner, checks bundled ConPTY, and uninstalls it before upload. Updater signatures are not Windows Authenticode.\n\nImportant\n\n- This is a Test-channel prerelease. Stable Latest remains unchanged. This does not certify real CLI sessions, mobile remote access, or authenticated Antigravity restore.",
       "zh": "调整\n\n- Windows、macOS 和 Linux 的标准安装包仅包含桌面功能，不再包含远程 Host 和浏览器运行时。实验性远程功能仍独立提供。\n- 发布流程会在 GitHub 托管的临时 Windows 环境中安装同一份更新签名 NSIS 安装包，验证内置 ConPTY 后卸载，通过才上传。更新签名不是 Windows Authenticode。\n\n重要说明\n\n- 这是测试通道的预发布版本，不变更稳定版。此版不认证真实 CLI 会话、移动端远程或 Antigravity 登录后的会话恢复。"

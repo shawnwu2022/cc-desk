@@ -158,3 +158,8 @@ The desktop Release caller omitted named forwarding, so the Android signer recei
 
 - RC4 的桌面三端与 Android 已签名，但发布脚本仍只接受三个桌面产物，导致发布前复核拒绝同运行的第四个产物。证据：[发布任务日志](https://github.com/shawnwu2022/cc-desk/actions/runs/45746545884/job/139675056092)。
 - 回归用发布命令实际核对完整清单：桌面版严格三个；合并测试版严格三个桌面加一个 Android，其名称、产物 ID、提交、运行和尝试次数必须匹配。不得过滤掉未知产物来凑数量。产物清单校验仍不能替代下载后的真实验签。
+
+## 发布说明缺失应在构建前拦截
+
+- RC4 已签名且通过两次产物复核，却因 `docs/release-notes.json` 缺少当前版本而在最后写说明时停下。`CHANGELOG.md` 有同版本不能替代实际发布入口的说明源。
+- 在普通 CI 和发布构建前核对当前精确版本的发布说明；正式发布继续重新读取同提交的说明并保留实际技术披露。证据：[失败的发布任务](https://github.com/shawnwu2022/cc-desk/actions/runs/45753101953/job/139691747812)。
