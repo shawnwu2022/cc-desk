@@ -330,6 +330,7 @@ jobs:
         id: promotion
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          ANDROID_ARTIFACT_ID: ${{ needs.android.outputs.artifact_id }}
         run: |
           node scripts/release-preflight.mjs --artifacts --prepare-draft-recovery --coverage coverage/windows-native-coverage.json \
             --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
@@ -405,6 +406,7 @@ jobs:
         if: steps.promotion.outputs.recovery_draft == ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          ANDROID_ARTIFACT_ID: ${{ needs.android.outputs.artifact_id }}
         run: |
           node scripts/release-preflight.mjs --artifacts --coverage coverage/windows-native-coverage.json \
             --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \

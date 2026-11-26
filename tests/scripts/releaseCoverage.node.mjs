@@ -84,7 +84,7 @@ function zip(entries, { method = 8, descriptor = true } = {}) {
   end.writeUInt32LE(central.length, 12); end.writeUInt32LE(offset, 16)
   return Buffer.concat([...chunks, central, end])
 }
-function preflight({ version, mutate = () => {}, mutateReport = () => {}, mutateLocal = () => {}, args, extraArgs = [], missingLog = false, stage = false, inPlace = true, preparedPhase = false, omitNotes = false } = {}) {
+function preflight({ version, mutate = () => {}, mutateReport = () => {}, mutateLocal = () => {}, args, extraArgs = [], missingLog = false, stage = false, inPlace = true, preparedPhase = false, omitNotes = false, androidArtifactId = '' } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'ccdesk-release-coverage-'))
   try {
     const c = context(), value = report()
@@ -115,7 +115,7 @@ function preflight({ version, mutate = () => {}, mutateReport = () => {}, mutate
         return { name, data, signature: Buffer.from(`untrusted comment: fixture\n${signedPacket.toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`).toString('base64') }
       })
       mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'src-tauri')); mkdirSync(join(directory, 'artifacts'))
-      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'release-version.mjs', 'windows-native-validation.mjs', 'windows-native-scope.json', 'windows-rust-shards.mjs',
+      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'release-version.mjs', 'release-mobile-site.mjs', 'windows-native-validation.mjs', 'windows-native-scope.json', 'windows-rust-shards.mjs',
         'release-coverage-archive.mjs', 'release-draft-recovery.mjs', 'release-prepared-recovery.json', 'verify-updater-manifest.js', 'updater-signature.js']) {
         copyFileSync(new URL(`../../scripts/${file}`, import.meta.url), join(directory, 'scripts', file))
       }
@@ -151,7 +151,7 @@ function preflight({ version, mutate = () => {}, mutateReport = () => {}, mutate
     if (version) {
       assert.equal(stage, false, 'version fixture must never alter the fixed recovery transaction')
       mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'src-tauri'))
-      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'release-version.mjs', 'windows-native-validation.mjs',
+      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'release-version.mjs', 'release-mobile-site.mjs', 'windows-native-validation.mjs',
         'windows-native-scope.json', 'windows-rust-shards.mjs', 'release-coverage-archive.mjs', 'release-draft-recovery.mjs',
         'release-prepared-recovery.json', 'verify-updater-manifest.js', 'updater-signature.js']) {
         copyFileSync(new URL('../../scripts/' + file, import.meta.url), join(directory, 'scripts', file))
@@ -194,13 +194,36 @@ function preflight({ version, mutate = () => {}, mutateReport = () => {}, mutate
       'scripts/release-preflight.mjs', ...selectedArgs, ...extraArgs], { encoding: 'utf8', timeout: 5000,
       cwd: stage || version ? directory : fileURLToPath(new URL('../..', import.meta.url)), env: { ...process.env, GITHUB_OUTPUT: join(directory, 'outputs'),
         GITHUB_REPOSITORY: 'shawnwu2022/cc-desk', GITHUB_SHA: sha, GITHUB_REF: 'refs/heads/main',
-        GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GITHUB_TOKEN: 'synthetic-fixture-token',
+        ANDROID_ARTIFACT_ID: androidArtifactId, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GITHUB_TOKEN: 'synthetic-fixture-token',
         FIXTURE_API: JSON.stringify(api), FIXTURE_ARCHIVE: archive.toString('base64') } })
     assert.ifError(result.error)
     return { ...result, notes: result.status === 0 && !args && !omitNotes ? readFileSync(join(directory, 'notes.md'), 'utf8') : null,
       outputs: result.status === 0 ? readFileSync(join(directory, 'outputs'), 'utf8') : null }
   } finally { rmSync(directory, { recursive: true, force: true }) }
 }
+
+test('ReleaseCoverage_CombinedMobileArtifactInventory_029', () => {
+  const add = api => api.platformArtifacts.push({ id: 51, name: `android-candidate-${sha}-42-1`, expired: false,
+    workflow_run: { id: 42, head_sha: sha, head_branch: 'main' } })
+  const run = (mutate = () => {}, id = '51', version = '0.28.0-rc.4', flags = []) => preflight({
+    version, mutate: api => { add(api); mutate(api) },
+    extraArgs: ['--artifacts', ...flags], androidArtifactId: id ?? '',
+  })
+  for (const good of [run(), run(() => {}, '51', '0.28.0-rc.4', ['--prepare-draft-recovery'])]) {
+    assert.equal(good.status, 0, good.stderr)
+  }
+  for (const result of [
+    run(api => api.platformArtifacts.pop()), run(api => api.platformArtifacts.push({...api.platformArtifacts.at(-1)})),
+    run(api => api.platformArtifacts.at(-1).expired = true),
+    run(api => api.platformArtifacts.at(-1).name = `android-candidate-${sha}-42-2`),
+    run(api => api.platformArtifacts.at(-1).workflow_run.head_sha = '2'.repeat(40)),
+    run(api => api.platformArtifacts.at(-1).workflow_run.id = 43),
+    run(() => {}, '52'), run(() => {}, null), run(() => {}, '51', '0.27.0'),
+  ]) {
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /artifact/)
+  }
+})
 
 test('ReleaseCoverage_ExactArtifact_001', () => {
   assert.deepEqual(policy.resolveCoverageArtifact([artifact()], ci, sha), artifact())
@@ -441,11 +464,11 @@ test('ReleaseCoverage_PreflightCannotUseLocalJSONAloneOrWaivers_011', () => {
   }
 })
 test('ReleaseCoverage_CIReportAndReleasePlatformRunsStayDistinct_012', () => {
-  assert.equal(preflight({ extraArgs: ['--artifacts'] }).status, 0)
+  assert.equal(preflight({ version: '0.27.0', extraArgs: ['--artifacts'] }).status, 0)
   for (const mutate of [a => { a.platformArtifacts[0].workflow_run.id = 7 },
     a => { a.platformArtifacts.pop() }, a => { a.platformArtifacts.push(artifact()) },
     a => { a.releaseRun.path = '.github/workflows/ci.yml' }, a => { a.releaseRun.head_sha = '2'.repeat(40) }]) {
-    assert.equal(preflight({ mutate, extraArgs: ['--artifacts'] }).status, 1)
+    assert.equal(preflight({ version: '0.27.0', mutate, extraArgs: ['--artifacts'] }).status, 1)
   }
 })
 test('ReleaseCoverage_CallerForgeryCannotSubstituteArtifactBytes_013', () => {

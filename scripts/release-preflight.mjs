@@ -6,6 +6,7 @@ import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertReview
 import { REPORT_FILENAME, VALIDATION_POLICY } from './windows-native-validation.mjs'
 import { fetchCoverageArchive, validateFetchedCoverage } from './release-coverage-archive.mjs'
 import { releaseChannel } from './release-version.mjs'
+import { mobileReleaseFamily } from './release-mobile-site.mjs'
 
 const { GITHUB_REPOSITORY: repository, GITHUB_SHA: sha, GITHUB_REF: ref, GITHUB_EVENT_NAME: event, GITHUB_TOKEN: token } = process.env
 if (!/^[-\w.]+\/[-\w.]+$/.test(repository ?? '') || !token) throw new Error('workflow repository/token required')
@@ -126,11 +127,19 @@ if (args.has('--resolve-coverage')) {
     const run = await api(`actions/runs/${runId}`)
     if (run.head_sha !== sha || run.head_branch !== 'main' || run.path !== '.github/workflows/release.yml') throw new Error('release workflow source binding failed')
     const allArtifacts = await pages(`actions/runs/${runId}/artifacts`, 'artifacts')
-    const backupName = backupArtifactName(sha, runId, positiveInteger(process.env.GITHUB_RUN_ATTEMPT ?? '1'))
+    const attempt = positiveInteger(process.env.GITHUB_RUN_ATTEMPT ?? '1')
+    const mobile = mobileReleaseFamily(packageVersion)
+    const androidArtifactId = process.env.ANDROID_ARTIFACT_ID
+    if (mobile && (event !== 'workflow_dispatch' || releaseChannel(packageVersion) !== 'prerelease' || !/^[1-9][0-9]*$/.test(androidArtifactId ?? ''))) {
+      throw new Error('combined prerelease requires the Android signing job artifact ID')
+    }
+    if (!mobile && androidArtifactId) throw new Error('unexpected Android artifact for a desktop-only release')
+    const android = mobile ? { id: positiveInteger(androidArtifactId), attempt } : undefined
+    const backupName = backupArtifactName(sha, runId, attempt)
     const backups = allArtifacts.filter(artifact => artifact.name === backupName)
     if (backups.length > 1 || backups.some(artifact => artifact.expired !== false || artifact.workflow_run?.id !== runId
       || artifact.workflow_run?.head_sha !== sha || artifact.workflow_run?.head_branch !== 'main')) throw new Error('draft backup artifact binding failed')
-    validateArtifacts(allArtifacts.filter(artifact => artifact.name !== backupName), sha, runId)
+    validateArtifacts(allArtifacts.filter(artifact => artifact.name !== backupName), sha, runId, android)
   }
   if (staged) {
     await verifyStagedReleaseBytes(staged.release, staged.binding, staged.files, repository, token,
