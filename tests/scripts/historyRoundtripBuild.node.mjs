@@ -3,10 +3,38 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawnTestPwsh, withIsolatedPwshCache } from './helpers/isolatedPwsh.mjs'
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
 const present = (path) => existsSync(new URL(`../../${path}`, import.meta.url))
+
+test('parallel Linux PowerShell launches get unique writable caches and clean them on failure', () => {
+  const callerEnv = { PATH: 'kept', XDG_CACHE_HOME: 'caller-cache' }
+  const paths = []
+  const check = options => {
+    const path = options.env.XDG_CACHE_HOME
+    assert.equal(options.env.PATH, 'kept')
+    assert.equal(options.timeout, 47)
+    assert.ok(!paths.includes(path))
+    paths.push(path)
+    writeFileSync(join(path, 'started'), 'fixture')
+  }
+  const options = { env: callerEnv, timeout: 47 }
+  const result = withIsolatedPwshCache(options, first => {
+    check(first)
+    assert.throws(() => withIsolatedPwshCache(options, second => {
+      check(second)
+      throw new Error('fixture failure')
+    }, 'linux'), /fixture failure/)
+    assert.ok(existsSync(paths[0]))
+    assert.ok(!existsSync(paths[1]))
+    return { status: 1 }
+  }, 'linux')
+  assert.deepEqual(result, { status: 1 })
+  assert.ok(paths.every(path => !existsSync(path)))
+  assert.equal(callerEnv.XDG_CACHE_HOME, 'caller-cache')
+  assert.equal(withIsolatedPwshCache(options, received => received, 'win32'), options)
+})
 
 function releaseRejectionStep() {
   const workflow = read('.github/workflows/ci.yml').replace(/\r\n/g, '\n')
@@ -17,12 +45,13 @@ function releaseRejectionStep() {
 
 // 执行真实 CI 编排，复用前端仍保留两次原生构建、失败传播和原 binding 字节。
 test('Roundtrip_DebugFrontendReuse_007', t => {
-  const available = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
+  const available = spawnTestPwsh(['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
   if (available.error?.code === 'ENOENT') {
     t.skip('PowerShell unavailable: executable debug build orchestration remains unrun')
     return
   }
   assert.equal(available.status, 0, available.stderr)
+  assert.match(available.stdout.trim(), /^\d+\.\d+\.\d+(?:[-+][\w.+-]+)?$/, 'version probe must execute')
   const workflow = read('.github/workflows/ci.yml').replace(/\r\n/g, '\n')
   const match = workflow.match(/      - name: Build both inert embedded acceptance scenarios without packages\n        run: \|\n((?:          .*\n)+)/)
   assert.ok(match, 'execute the actual debug workflow body')
@@ -70,7 +99,7 @@ ${step}
 }
 if ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }
 `)
-      const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', script], { cwd: temporary, encoding: 'utf8', timeout: 30_000 })
+      const result = spawnTestPwsh(['-NoProfile', '-NonInteractive', '-File', script], { cwd: temporary, encoding: 'utf8', timeout: 30_000 })
       assert.ifError(result.error)
       assert.equal(result.status === 0, failure === 'none', result.stdout + result.stderr)
       const receipt = JSON.parse(readFileSync(join(temporary, 'receipt.json'), 'utf8').replace(/^\uFEFF/, ''))
@@ -105,12 +134,13 @@ test('release rejection exits successfully only after both denial assertions', (
 })
 
 test('actual release rejection step preserves GitHub pwsh wrapper outcomes', t => {
-  const available = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
+  const available = spawnTestPwsh(['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
   if (available.error?.code === 'ENOENT') {
     t.skip('PowerShell unavailable: executable GitHub wrapper contract remains unrun')
     return
   }
   assert.equal(available.status, 0, `PowerShell version probe failed: ${available.stderr}`)
+  assert.match(available.stdout.trim(), /^\d+\.\d+\.\d+(?:[-+][\w.+-]+)?$/, 'version probe must execute')
   const step = releaseRejectionStep()
   const cargo = 'cargo build --locked --release --features history-roundtrip-acceptance'
   assert.equal(step.split(cargo).length, 2, 'replace only the actual native build invocation')
@@ -127,7 +157,7 @@ test('actual release rejection step preserves GitHub pwsh wrapper outcomes', t =
       const wrapped = "$ErrorActionPreference = 'stop'\n" + body.replace(cargo, command) +
         '\nif ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n'
       writeFileSync(script, wrapped)
-      const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `. ${quote(script)}`], { encoding: 'utf8', timeout: 30_000 })
+      const result = spawnTestPwsh(['-NoProfile', '-NonInteractive', '-Command', `. ${quote(script)}`], { encoding: 'utf8', timeout: 30_000 })
       assert.ifError(result.error)
       assert.notEqual(result.status, null, 'wrapper must terminate with an exit status')
       return { status: result.status, output: result.stdout + result.stderr }
@@ -135,6 +165,7 @@ test('actual release rejection step preserves GitHub pwsh wrapper outcomes', t =
     const marker = 'roundtrip acceptance is forbidden in release builds'
     const denied = run(step, 101, marker)
     assert.equal(denied.status, 0, denied.output)
+    assert.ok(denied.output.includes(marker), 'native denial must actually run')
     const succeeded = run(step, 0, marker)
     assert.notEqual(succeeded.status, 0, 'an unexpected successful build must fail the step')
     assert.match(succeeded.output, /Acceptance feature entered a release build/)
@@ -144,6 +175,7 @@ test('actual release rejection step preserves GitHub pwsh wrapper outcomes', t =
     const missingAcknowledgement = run(step.replace(/\nexit 0\n$/, '\n'), 101, marker)
     // pwsh -Command 会将被调用脚本的非 0/1 退出码映射为 1。
     assert.equal(missingAcknowledgement.status, 1, 'the runner suffix must expose an unacknowledged native failure')
+    assert.ok(missingAcknowledgement.output.includes(marker), 'native denial must run before the runner suffix')
   } finally {
     rmSync(temporary, { recursive: true, force: true })
   }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { spawnSync } from 'node:child_process'
+import { spawnTestPwsh } from './helpers/isolatedPwsh.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const read = name => existsSync(root + name) ? readFileSync(root + name, 'utf8') : ''
@@ -99,13 +99,14 @@ test('Driver_ObjectKeyResultsStayArrays_010', () => {
 
 // Windows CI executes the production PowerShell validators against mutations, without native effects.
 test('Driver_ExecutableDryRunContracts_007', t => {
-  const available = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
+  const available = spawnTestPwsh(['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' })
   if (available.error?.code === 'ENOENT') {
     t.skip('PowerShell unavailable: source checks only; no native/dry-run execution claim')
     return
   }
   assert.equal(available.status, 0, `PowerShell version probe failed: ${available.stderr}`)
-  const result = spawnSync('pwsh', ['-NoProfile', '-File', root + 'tests/scripts/historyRoundtripDriver.ps1'], { encoding: 'utf8', timeout: 120_000 })
+  assert.match(available.stdout.trim(), /^\d+\.\d+\.\d+(?:[-+][\w.+-]+)?$/, 'version probe must execute')
+  const result = spawnTestPwsh(['-NoProfile', '-File', root + 'tests/scripts/historyRoundtripDriver.ps1'], { encoding: 'utf8', timeout: 120_000 })
   assert.equal(result.status, 0, `PowerShell dry-run/report contracts failed:\n${result.stdout}\n${result.stderr}`)
   assert.match(result.stdout, /POWERSHELL_CONTRACT_PASS checks=\d+ nativeExecution=false roundtripAccepted=false/)
 })
