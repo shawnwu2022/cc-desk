@@ -348,8 +348,7 @@ final class NativeDesktopBackend implements DesktopBackend {
             String lifecycle = item.getString("lifecycle");
             boolean archived = item.getBoolean("archived");
             org.json.JSONArray bytes = item.getJSONArray("reference");
-            if (item.length() != 4 || title.trim().isEmpty() || title.length() > 256
-                || title.codePoints().anyMatch(ch -> Character.isISOControl(ch) || Character.getType(ch) == Character.FORMAT)
+            if (item.length() != 4 || !SessionDisplayTitle.valid(title)
                 || !("open".equals(lifecycle) || "closed".equals(lifecycle)) ||
                 archived && "open".equals(lifecycle) || bytes.length() != 32)
                 throw new org.json.JSONException("Invalid management row");
@@ -455,9 +454,7 @@ final class NativeDesktopBackend implements DesktopBackend {
             Object state = item.get("lifecycle");
             if (item.length() != 2 || !(title instanceof String) ||
                 !("open".equals(state) || "closed".equals(state) || "history".equals(state)) ||
-                ((String) title).trim().isEmpty() || ((String) title).length() > 256 ||
-                ((String) title).codePoints().anyMatch(ch -> Character.isISOControl(ch) ||
-                    Character.getType(ch) == Character.FORMAT))
+                !SessionDisplayTitle.valid((String) title))
                 throw new org.json.JSONException("Invalid catalogue row");
             rows.add(new CatalogueRow((String)title, (String)state));
         }

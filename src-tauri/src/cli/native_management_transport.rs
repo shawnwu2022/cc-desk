@@ -26,6 +26,7 @@ pub(crate) struct ManagementRenameAdmission {
     pub(crate) prepare_epoch: WireU64,
     pub(crate) commit_epoch: WireU64,
     pub(crate) current_peer: CurrentManagementPeer,
+    pub(crate) claude_archive_changed: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl NativeRuntime {
@@ -174,6 +175,7 @@ impl NativeRuntime {
                             token,
                             &action,
                             fenced,
+                            || (admission.claude_archive_changed)(),
                             |receipt, check| {
                                 close
                                     .as_ref()

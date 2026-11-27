@@ -174,6 +174,7 @@ impl ProjectionService {
         Ok(RemoteRenameGrant { grant, selector })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_remote_rename(
         self: &Arc<Self>,
         caller: &CallerIdentity,
@@ -183,6 +184,7 @@ impl ProjectionService {
         token: OpaqueKey,
         action: &ManagementAction,
         check_peer: CurrentManagementPeer,
+        claude_archive_changed: impl FnOnce(),
         close: impl FnOnce(&LaunchStatus, RenameFence) -> Result<(), SafeError>,
         reconnect: impl FnOnce(&LaunchStatus, RenameFence) -> Result<(), SafeError>,
     ) -> Result<(), SafeError> {
@@ -274,6 +276,7 @@ impl ProjectionService {
                     &fresh.project_root,
                     matches!(action, ManagementAction::Archive),
                     fence,
+                    claude_archive_changed,
                 )?;
             }
             ManagementAction::Restore if target.source.cli == CliKind::Codex => {
@@ -356,6 +359,7 @@ impl ProjectionService {
         expected_root: &str,
         archived: bool,
         fence: RenameFence,
+        changed: impl FnOnce(),
     ) -> Result<(), SafeError> {
         let authority = self
             .registry
@@ -392,6 +396,8 @@ impl ProjectionService {
             fence().map_err(|_| anyhow::anyhow!("Management revoked"))
         })
         .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))?;
+        // 磁盘已提交，即使远程回执随后失效也要同步本机视图。
+        changed();
         fence().map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))
     }
 

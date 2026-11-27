@@ -947,7 +947,8 @@ impl<R> RunRegistry<R> {
             let Ok(current) = self.checked_run_record(&state, caller, &status.run) else {
                 continue;
             };
-            if current.status != status
+            if !identity.is_current()
+                || current.status != status
                 || !current.catalogue_eligible()
                 || !current
                     .source
@@ -1053,6 +1054,14 @@ impl<R> RunRegistry<R> {
         let state = self.state.lock();
         let record = self.checked_run_record(&state, caller, &selected.run)?;
         if record.status != selected || !record.catalogue_eligible() {
+            return Err(error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"));
+        }
+        if matches!(native, CatalogueNativeId::Claude(_))
+            && !record
+                .catalogue_claude
+                .as_ref()
+                .is_some_and(|identity| identity.is_current())
+        {
             return Err(error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"));
         }
         Ok(selected)

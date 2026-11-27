@@ -1,10 +1,13 @@
 //! All eligible desktop scopes; the phone never supplies profile or project selectors.
 use super::{CallerIdentity, NativeRuntime};
 use crate::cli::{
-    native_projection::{catalogue_history_source::RetainedHistory, wire::ScopeTarget},
+    native_projection::{
+        catalogue_history_source::RetainedHistory, service::admit_project, wire::ScopeTarget,
+    },
     profiles::{error, Override},
     storage::WorkspaceDocument,
     types::{CliKind, SafeError, WireU64},
+    workspace::RegisteredProject,
 };
 use std::sync::Arc;
 
@@ -16,14 +19,18 @@ pub(crate) struct ManagementPortfolio {
     pub(super) sources: Vec<Arc<RetainedHistory>>,
 }
 
-fn management_targets(document: &WorkspaceDocument) -> Result<Vec<ScopeTarget>, SafeError> {
+fn management_targets(
+    document: &WorkspaceDocument,
+    available: impl Fn(&RegisteredProject) -> bool,
+) -> Result<Vec<ScopeTarget>, SafeError> {
     let projects = document
         .registered_projects
         .iter()
         .filter_map(|(id, project)| {
             (id == &project.project_id
                 && project.host_id == "local"
-                && !matches!(project.hidden, Override::Set(true)))
+                && !matches!(project.hidden, Override::Set(true))
+                && available(project))
             .then(|| id.clone())
         })
         .collect::<Vec<_>>();
@@ -63,7 +70,8 @@ impl NativeRuntime {
             workspace_revision: document.revision,
             sources: Vec::new(),
         };
-        for target in management_targets(&document)? {
+        // 初筛不扩大授权；实际 scope 仍逐个项目重新验证注册目录和身份。
+        for target in management_targets(&document, |project| admit_project(project).is_ok())? {
             check_pair()?;
             // Uninstalled or ambiguous history sources cannot become targets.
             // Do not broaden them to ambient/default history.
@@ -112,6 +120,7 @@ mod tests {
         }
         for (id, host, hidden) in [
             ("visible", "local", Override::Inherit),
+            ("unavailable", "local", Override::Inherit),
             ("hidden", "local", Override::Set(true)),
             ("remote", "other", Override::Inherit),
         ] {
@@ -130,7 +139,7 @@ mod tests {
                 },
             );
         }
-        let targets = management_targets(&doc).unwrap();
+        let targets = management_targets(&doc, |p| p.project_id != "unavailable").unwrap();
         assert_eq!(targets.len(), 4);
         let mut actual = Vec::new();
         for target in targets {
@@ -146,5 +155,53 @@ mod tests {
             actual.push(profile_id);
         }
         assert_eq!(actual, ["claude", "codex", "codex-alt", "opencode"]);
+    }
+
+    #[test]
+    fn management_portfolio_keeps_healthy_project_when_other_root_is_unavailable() {
+        use crate::cli::native_projection::scoped_fs::Root;
+
+        let parent = tempfile::tempdir().unwrap();
+        let healthy = parent.path().join("healthy");
+        std::fs::create_dir(&healthy).unwrap();
+        let root = Root::open(&healthy).unwrap();
+        let mut doc = WorkspaceDocument::default();
+        doc.profiles
+            .insert("claude".into(), Profile::new("claude", CliKind::Claude));
+        let healthy_id = uuid::Uuid::new_v4().to_string();
+        for (id, selected_path, source_path_key) in [
+            (healthy_id.clone(), healthy.clone(), root.key().to_owned()),
+            (
+                uuid::Uuid::new_v4().to_string(),
+                parent.path().join("missing"),
+                root.key().to_owned(),
+            ),
+            (
+                uuid::Uuid::new_v4().to_string(),
+                healthy,
+                "replaced-root".into(),
+            ),
+        ] {
+            doc.registered_projects.insert(
+                id.clone(),
+                RegisteredProject {
+                    project_id: id,
+                    host_id: "local".into(),
+                    source_path_key,
+                    selected_path,
+                    canonical_path: None,
+                    alias: Override::Inherit,
+                    pinned: Override::Inherit,
+                    hidden: Override::Inherit,
+                    extra: Default::default(),
+                },
+            );
+        }
+
+        let targets = management_targets(&doc, |project| admit_project(project).is_ok()).unwrap();
+        let [ScopeTarget::Profile { project_ids, .. }] = targets.as_slice() else {
+            panic!("Expected one healthy management scope");
+        };
+        assert_eq!(project_ids, &[healthy_id]);
     }
 }

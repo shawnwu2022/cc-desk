@@ -90,7 +90,7 @@ pub(crate) struct ClaudeCatalogueIdentity {
     expected: uuid::Uuid,
     cwd: String,
     project: super::native_projection::scoped_fs::Root,
-    confirmed: std::sync::atomic::AtomicBool,
+    state: std::sync::atomic::AtomicU8,
 }
 #[cfg(all(windows, feature = "remote-observer"))]
 impl ClaudeCatalogueIdentity {
@@ -100,34 +100,50 @@ impl ClaudeCatalogueIdentity {
             cwd: cwd.to_owned(),
             project: super::native_projection::scoped_fs::Root::open(std::path::Path::new(cwd))
                 .ok()?,
-            confirmed: Default::default(),
+            state: Default::default(),
         })
     }
 
-    // Takes only already accepted hook metadata on the original run binding.
-    // No hook-supplied path is opened or used as a locator.
+    const PENDING: u8 = 0;
+    const CONFIRMED: u8 = 1;
+    const RETIRED: u8 = 2;
+
+    // 仅处理原运行已认证的 hook 元数据，不打开 hook 提供的路径。
     pub(crate) fn observe(&self, event: &serde_json::Value) {
-        if event["hook_event_name"] == "SessionStart"
+        use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+        let cwd = event["cwd"]
+            .as_str()
+            .filter(|cwd| !cwd.is_empty())
+            .map(|cwd| std::path::Path::new(cwd) == std::path::Path::new(&self.cwd));
+        let id = event["session_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(|id| uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed == self.expected));
+        if cwd == Some(false) || id == Some(false) {
+            // 身份一旦冲突，后续迟到的旧事件不可重新启用此绑定。
+            self.state.store(Self::RETIRED, Release);
+        } else if cwd == Some(true)
+            && event["hook_event_name"] == "SessionStart"
             && event["source"] == "startup"
-            && event["cwd"]
-                .as_str()
-                .is_some_and(|cwd| std::path::Path::new(cwd) == std::path::Path::new(&self.cwd))
-            && event["session_id"].as_str().and_then(|id| {
-                let parsed = uuid::Uuid::parse_str(id).ok()?;
-                (id == parsed.to_string()).then_some(parsed)
-            }) == Some(self.expected)
+            && event["session_id"].as_str() == Some(self.expected.to_string().as_str())
         {
-            self.confirmed
-                .store(true, std::sync::atomic::Ordering::Release);
+            let _ = self
+                .state
+                .compare_exchange(Self::PENDING, Self::CONFIRMED, AcqRel, Acquire);
         }
     }
 
+    pub(crate) fn is_current(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::Acquire) == Self::CONFIRMED
+    }
+
     pub(crate) fn current(&self) -> Option<(uuid::Uuid, &str)> {
-        if !self.confirmed.load(std::sync::atomic::Ordering::Acquire) {
+        if !self.is_current() {
             return None;
         }
         self.project.source_current().ok()?;
-        Some((self.expected, self.project.key()))
+        self.is_current()
+            .then(|| (self.expected, self.project.key()))
     }
 }
 
@@ -2521,8 +2537,6 @@ mod owned_command_tests {
         let project = tempfile::tempdir().unwrap();
         let cwd = project.path().to_str().unwrap();
         let id = uuid::Uuid::new_v4();
-        let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
-        assert!(proof.current().is_none());
         let startup = serde_json::json!({
             "hook_event_name": "SessionStart", "source": "startup",
             "cwd": cwd, "session_id": id.to_string(),
@@ -2536,13 +2550,55 @@ mod owned_command_tests {
                 serde_json::json!(uuid::Uuid::new_v4().to_string()),
             ),
         ] {
+            let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+            assert!(proof.current().is_none());
             let mut wrong = startup.clone();
             wrong[key] = val;
             proof.observe(&wrong);
             assert!(proof.current().is_none());
         }
+        let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
         proof.observe(&startup);
         assert_eq!(proof.current().map(|(id, _)| id), Some(id));
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[test]
+    fn claude_catalogue_conflict_retires_original_binding_without_rebinding() {
+        let project = tempfile::tempdir().unwrap();
+        let cwd = project.path().to_str().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let startup = serde_json::json!({
+            "hook_event_name": "SessionStart", "source": "startup",
+            "cwd": cwd, "session_id": id.to_string(),
+        });
+        for (field, value) in [
+            (
+                "session_id",
+                serde_json::json!(uuid::Uuid::new_v4().to_string()),
+            ),
+            ("cwd", serde_json::json!("different-directory")),
+        ] {
+            let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+            proof.observe(&startup);
+            assert!(proof.current().is_some());
+            proof.observe(&serde_json::json!({"hook_event_name": "Notification"}));
+            assert!(proof.current().is_some());
+
+            let mut switched = startup.clone();
+            switched["source"] = serde_json::json!("resume");
+            switched[field] = value;
+            proof.observe(&switched);
+            assert!(proof.current().is_none());
+            proof.observe(&startup);
+            assert!(proof.current().is_none());
+
+            // 冲突先抵达时，迟到的启动事件也不能激活旧绑定。
+            let pending = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+            pending.observe(&switched);
+            pending.observe(&startup);
+            assert!(pending.current().is_none());
+        }
     }
 
     #[cfg(all(windows, feature = "remote-observer"))]

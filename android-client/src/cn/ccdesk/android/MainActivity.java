@@ -126,6 +126,7 @@ public final class MainActivity extends Activity {
     private void navigateHome(boolean sessions) {
         if (showingSessions == sessions) return;
         showingSessions = sessions;
+        if (!sessions) stopManagementViews();
         render();
     }
 
@@ -613,7 +614,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateManagementProjection(DesktopBackend.Desktop desktop) {
-        if (!projectionForeground) return;
+        if (!projectionForeground || !showingSessions) return;
         TextView viewport = managementViewports.get(desktop.localId);
         if (viewport == null) return;
         if (!viewport.isAttachedToWindow()) {
@@ -690,9 +691,14 @@ public final class MainActivity extends Activity {
     @Override protected void onStop() {
         projectionForeground = false;
         if (controlPanel != null) leaveControl(true);
-        for (TextView viewport : managementViewports.values()) viewport.setText("");
-        if (backend != null) backend.stopManagementViews();
+        stopManagementViews();
         super.onStop();
+    }
+
+    private void stopManagementViews() {
+        for (TextView viewport : managementViewports.values()) viewport.setText("");
+        managementViewports.clear();
+        if (backend != null) backend.stopManagementViews();
     }
 
     @Override public void onBackPressed() {

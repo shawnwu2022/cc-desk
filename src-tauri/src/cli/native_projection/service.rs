@@ -1085,7 +1085,9 @@ fn profile_locations_diagnosed(
     let selected = locations(profile.cli, &env).map_err(error)?;
     Ok((env, selected))
 }
-fn admit_project(project: &RegisteredProject) -> Result<(Root, Vec<PathBuf>), SafeError> {
+pub(crate) fn admit_project(
+    project: &RegisteredProject,
+) -> Result<(Root, Vec<PathBuf>), SafeError> {
     project.validate()?;
     let root = Root::open(&project.selected_path).map_err(error)?;
     if root.key() != project.source_path_key {

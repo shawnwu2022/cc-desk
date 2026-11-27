@@ -1,5 +1,6 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { openInFileManager, nativeUnarchiveSession, nativeArchiveSession, nativeRenameSession, nativePrepareOpencodeSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
 import { useLegacyHistoryRefresh } from '@/composables/useLegacyHistoryRefresh'
@@ -1201,8 +1202,17 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     await nextTick()
     if (!disposed && shell.section === 'workspace') host.value?.focus()
   })
+  let stopProjectsStateChange: UnlistenFn | undefined
   onMounted(() => {
     if (!enabled) return
+    void listen('projects-state-changed', () => {
+      if (!disposed) void projects.ensureLoaded().then(() => {
+        if (!disposed) return projects.reload()
+      }).catch(() => {})
+    }).then(stop => {
+      if (disposed) void stop()
+      else stopProjectsStateChange = stop
+    }).catch(() => {})
     void useHookStore().init()
     void refresh()
   })
@@ -1243,6 +1253,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   onUnmounted(() => {
     stopIndexMaintenance()
     disposed = true; ++refreshOwner
+    void stopProjectsStateChange?.()
     if (historyTimer) clearTimeout(historyTimer)
     pendingHistoryOwners.clear()
     for (const owner of catalogOwnerWatches.values()) {

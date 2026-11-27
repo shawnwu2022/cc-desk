@@ -20,10 +20,12 @@ use cc_desk_remote_transport::wss::{
     HostShareCommand as ShareCommand, HostShareResponse as ShareResponse, ShareSelectionKey,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use tauri::{Emitter, EventTarget};
 
 #[allow(dead_code)] // Only the desktop owner may hand this to a dedicated read route.
 pub(super) struct CatalogueOwner {
     owner: Arc<Owner>,
+    desktop_window: Window,
     device: DeviceSummary,
     pair: CataloguePair,
     purpose: RoutePurpose,
@@ -173,6 +175,7 @@ impl Owner {
                     approval_end
                 };
                 let owner = self.clone();
+                let desktop_window = window.clone();
                 let granted = tokio::task::spawn_blocking(move || {
                     owner.check_catalogue_device(&device, end)?;
                     let retained = match scope {
@@ -192,6 +195,7 @@ impl Owner {
                     owner.check_catalogue_device(&device, end)?;
                     Ok::<_, SafeError>(Arc::new(CatalogueOwner {
                         owner,
+                        desktop_window,
                         device,
                         pair,
                         purpose,
@@ -772,6 +776,7 @@ impl CatalogueOwner {
             next_management_epochs(&self.epoch).ok_or(Denied)?;
         let phone = P256Spki::new(&self.device.phone_endpoint_spki).map_err(|_| Denied)?;
         let current = self.clone();
+        let window = self.desktop_window.clone();
         self.owner
             .runtime
             .serve_management_rename(
@@ -786,6 +791,14 @@ impl CatalogueOwner {
                     inventory_epoch,
                     prepare_epoch,
                     commit_epoch,
+                    claude_archive_changed: Arc::new(move || {
+                        // 不发送会话或路径；桌面通过原有只读命令重新加载。
+                        let _ = window.emit_to(
+                            EventTarget::webview_window(window.label()),
+                            "projects-state-changed",
+                            (),
+                        );
+                    }),
                     current_peer: Arc::new(move || {
                         current.check_current()?;
                         Ok((current.pair.client, current.device.endpoint_binding))
