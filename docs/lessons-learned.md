@@ -174,3 +174,8 @@ The desktop Release caller omitted named forwarding, so the Android signer recei
 - A Git commit in a checkout under the system temporary directory is not a durable checkpoint. The checkout can disappear together with its Git objects and build cache during routine disk cleanup.
 - Keep release-development checkouts in a persistent project directory. Before a long interruption, verify a source-only recovery reference outside the temporary directory and check that it resolves to the same commit. Retain one current checkpoint, not a pile of builds or archives.
 - Test caches and disposable fixtures can still use temporary storage. A public or older local branch is a rebuild baseline, not evidence that unpushed work survived.
+
+## 跨 crate 复用生产源码时同步检查功能名
+
+- RC7 的 D13 夹具直接编译两份生产模块，但它没有桌面端的 `remote-observer` 功能开关。生产代码新增条件编译后，桌面构建能过，D13 的严格 lint 却会拒绝未知功能名。
+- 只在 D13 夹具清单登记它需要识别的条件名，仍不启用桌面功能，也不放宽未知条件检查。提交前同时运行桌面和 remote 工作区格式检查，以及 D13 的 `--all-targets -- -D warnings`。

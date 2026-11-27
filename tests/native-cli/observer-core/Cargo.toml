@@ -2,6 +2,9 @@
 name = "d13-observer-core"
 version = "0.0.0"
 edition = "2021"
+[lints.rust]
+# D13 直接编译生产源码，但不启用桌面远程传输功能。
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("remote-observer"))'] }
 [lib]
 path = "lib.rs"
 [[bin]]

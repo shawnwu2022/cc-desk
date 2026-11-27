@@ -1,10 +1,10 @@
 //! Process-local desktop enrollment owner. Paired membership is separate from
 //! live sharing; this owner never starts a data route or selects an active tab.
 use super::{
-    control, decode, hex, invitation_codes, ApprovalMachine,
+    control, decode, hex, invitation_codes,
     setup::TrustedHostProfile,
     store::{RelayPair, RevokeApproval, State as DeviceState, Store},
-    ObserverApproval, RelayCandidate, RelayInvite, VerifiedCandidate,
+    ApprovalMachine, ObserverApproval, RelayCandidate, RelayInvite, VerifiedCandidate,
 };
 use crate::{
     cli::{
@@ -28,10 +28,10 @@ use std::{
 use tauri::{AppHandle, Window};
 use tokio::sync::Mutex;
 
-#[path = "remote_native_observer_enrollment_sharing_owner.rs"]
-mod shares_owner;
 #[path = "remote_native_observer_catalogue_owner.rs"]
 mod catalogue_owner;
+#[path = "remote_native_observer_enrollment_sharing_owner.rs"]
+mod shares_owner;
 
 #[derive(Default)]
 pub(crate) struct OwnerService {
