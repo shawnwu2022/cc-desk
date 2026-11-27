@@ -66,6 +66,8 @@ struct ObserverSlot {
     identity_diagnostics: CodexIdentityDiagnostics,
     codex_admission_identity:
         Option<Arc<crate::version_history::codex_owner_identity::CodexOwnerIdentity>>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    claude_catalogue_identity: Option<Arc<crate::cli::launch_service::ClaudeCatalogueIdentity>>,
 }
 
 /// Receipt diagnostics only, never a second frontend adoption state machine.
@@ -167,6 +169,27 @@ impl ObserverLease {
         slot.codex_admission_identity = Some(identity);
         Ok(())
     }
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn bind_claude_catalogue(
+        &self,
+        identity: Arc<crate::cli::launch_service::ClaudeCatalogueIdentity>,
+    ) -> Result<(), SafeError> {
+        self.registry.check_binding(&self.binding)?;
+        let mut slots = self.registry.slots.lock();
+        let slot = slots
+            .get_mut(&self.binding.run)
+            .ok_or_else(|| error("OBSERVER_FORBIDDEN"))?;
+        if slot.source != ObserverSource::ClaudeHook
+            || slot.delivery.legacy_pty.is_some()
+            || !same_capability(&slot.capability, &self.binding.capability)
+            || slot.claude_catalogue_identity.is_some()
+        {
+            return Err(error("OBSERVER_FORBIDDEN"));
+        }
+        slot.claude_catalogue_identity = Some(identity);
+        Ok(())
+    }
+
     pub(crate) fn binding(&self) -> &ObserverBinding {
         &self.binding
     }
@@ -321,6 +344,8 @@ impl ObserverRegistry {
                 authorize,
                 identity_diagnostics: Default::default(),
                 codex_admission_identity: None,
+                #[cfg(all(windows, feature = "remote-observer"))]
+                claude_catalogue_identity: None,
             },
         );
         drop(slots);
@@ -448,6 +473,12 @@ impl ObserverRegistry {
             slot.seen.insert(event_id.to_string());
         }
 
+        #[cfg(all(windows, feature = "remote-observer"))]
+        if binding.source == ObserverSource::ClaudeHook {
+            if let Some(identity) = &slot.claude_catalogue_identity {
+                identity.observe(&event);
+            }
+        }
         if binding.source == ObserverSource::CodexHook {
             if let Some(identity) = &slot.codex_admission_identity {
                 if let Some(id) = event["session_id"]

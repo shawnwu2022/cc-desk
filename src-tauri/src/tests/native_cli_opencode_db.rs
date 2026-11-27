@@ -1068,6 +1068,48 @@ fn Opencode_DbKeepsV1TableWhenNoV2Migration_28() {
 }
 
 #[test]
+fn opencode_catalogue_db_missing_archive_column_is_unknown_not_negative_evidence() {
+    let fixture = Fixture::new();
+    let db = fixture.conn();
+    fixture.register_project(&db, "p1");
+    seed(
+        &db,
+        "ses_target",
+        "p1",
+        fixture.project.to_str().unwrap(),
+        "session",
+        1,
+        None,
+    );
+    let root = Root::open_sqlite(&fixture.root, "opencode.db").unwrap();
+    let before = read_history(&root, &[fixture.project_ref()]).unwrap();
+    assert!(matches!(
+        &before[0],
+        ResourceItem::Session {
+            archived: false,
+            opencode_archive: Some((false, _)),
+            ..
+        }
+    ));
+    db.execute("ALTER TABLE session DROP COLUMN time_archived", [])
+        .unwrap();
+    let root = Root::open_sqlite(&fixture.root, "opencode.db").unwrap();
+    let after = read_history(&root, &[fixture.project_ref()]).unwrap();
+    assert!(matches!(
+        &after[0],
+        ResourceItem::Session {
+            archived: false,
+            opencode_archive: None,
+            ..
+        }
+    ));
+    assert!(serde_json::to_value(&before[0])
+        .unwrap()
+        .get("opencodeArchive")
+        .is_none());
+}
+
+#[test]
 #[allow(non_snake_case)]
 fn OpenCodeArchive_HistoryReadsNativeFlag_007() {
     let f = Fixture::new();

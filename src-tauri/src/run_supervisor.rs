@@ -647,6 +647,49 @@ impl NativeRunSupervisor {
         state.request_stop()
     }
 
+    /// Stop only the exact, currently admitted Windows job and original
+    /// pinned PTY. Success requires native retirement, not just a kill request.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn stop_from_paired_management(
+        &self,
+        caller: &CallerIdentity,
+        receipt: &LaunchStatus,
+        check: impl FnOnce() -> Result<(), SafeError>,
+    ) -> Result<(), SafeError> {
+        let state = self
+            .core
+            .active
+            .lock()
+            .get(&identity(&receipt.run))
+            .cloned()
+            .ok_or_else(|| error("RUN_NOT_FOUND"))?;
+        if receipt.phase != crate::cli::run_registry::LaunchPhase::Running
+            || state.managed_job.is_none()
+            || !state.io_drop.is_pinned_conpty()
+        {
+            return Err(error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"));
+        }
+        state.request_stop_checked(|| {
+            check()?;
+            state.authorize_stop(caller, receipt)?;
+            if state.reaped.load(Ordering::Acquire) {
+                return Err(error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"));
+            }
+            Ok(())
+        })?;
+        let end = Instant::now() + Duration::from_secs(4);
+        while !(state.reaped.load(Ordering::Acquire)
+            && state.registry_retired.load(Ordering::Acquire)
+            && state.managed_job_quiescent())
+        {
+            if Instant::now() >= end {
+                return Err(error("REMOTE_MANAGEMENT_OUTCOME_UNKNOWN"));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Ok(())
+    }
+
     pub(crate) fn shutdown(&self) {
         const SHUTDOWN_REAP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1444,6 +1487,17 @@ impl SupervisedRun {
     }
 
     fn request_stop(self: &Arc<Self>) -> Result<(), SafeError> {
+        self.request_stop_checked(|| Ok(()))
+    }
+
+    fn request_stop_checked(
+        self: &Arc<Self>,
+        check: impl FnOnce() -> Result<(), SafeError>,
+    ) -> Result<(), SafeError> {
+        let control = self.stop_control.lock();
+        // The protected caller is rechecked under the exact original run's
+        // stop lock before input revocation, lifecycle flags, or termination.
+        check()?;
         #[cfg(feature = "remote-host")]
         self.observer_stopped.send_replace(true);
         #[cfg(feature = "remote-host")]
@@ -1465,7 +1519,6 @@ impl SupervisedRun {
         }
         self.changed.notify_all();
         {
-            let _control = self.stop_control.lock();
             if !self.stop_requested.load(Ordering::SeqCst) {
                 #[cfg(all(windows, feature = "remote-host"))]
                 if let Some(job) = &self.managed_job {
@@ -1490,6 +1543,7 @@ impl SupervisedRun {
                 self.changed.notify_all();
             }
         }
+        drop(control);
         self.start_waiter()
     }
 
@@ -3086,6 +3140,23 @@ mod wait_worker_join_tests {
         }
     }
     #[test]
+    fn paired_close_revocation_precedes_original_run_side_effects() {
+        let state = owner();
+        let failure = state
+            .request_stop_checked(|| {
+                assert!(state.stop_control.try_lock().is_none());
+                Err(error("REMOTE_MANAGEMENT_ROUTE_EXPIRED"))
+            })
+            .unwrap_err();
+        assert_eq!(failure.code, "REMOTE_MANAGEMENT_ROUTE_EXPIRED");
+        assert!(!state.stop_requested.load(Ordering::Acquire));
+        assert!(!state.waiter_running.load(Ordering::Acquire));
+        assert!(!state.automatic_retry_used.load(Ordering::Acquire));
+        #[cfg(feature = "remote-host")]
+        assert!(!*state.observer_stopped.borrow());
+    }
+
+    #[test]
     fn WaitWorkers_CapacityRejectsWithoutLosingOriginals_011() {
         let state = owner();
         let gate = Gate::new();
@@ -3851,6 +3922,41 @@ impl Drop for NativeObserverOwner {
 #[cfg(feature = "remote-host")]
 #[allow(dead_code, reason = "未接入产品授权和启动入口")]
 impl NativeRunAdmission {
+    /// The original run is rechecked on both sides of the bounded wait.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn management_projection(
+        &self,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<String, SafeError> {
+        use crate::cli::launch_service::NativeProducerSlot;
+        let scope = self.scope()?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        let pending = {
+            let native = state.native_canonical.lock();
+            let Some(NativeProducerSlot::Available(producer)) =
+                native.as_ref().map(|native| &native.producer)
+            else {
+                return Err(error("NATIVE_CANONICAL_UNAVAILABLE"));
+            };
+            producer
+                .request_management_projection(&scope, live)
+                .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?
+        };
+        let projection = pending
+            .wait(Duration::from_secs(1))
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?;
+        self.validate()?;
+        let text = projection
+            .text()
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?;
+        self.validate()?;
+        Ok(text)
+    }
+
     /// 只借用原 producer 排队捕获，不取出 writer，也不启动 Controller。
     fn request_observer_capture(
         &self,

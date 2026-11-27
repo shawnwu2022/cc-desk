@@ -22,6 +22,20 @@ use tauri::ipc::{InvokeBody, Request};
 use tauri::utils::config::{Config, FrontendDist, WindowConfig};
 use tauri::{Manager, Runtime, Url, Webview, WebviewUrl, WebviewWindow};
 
+#[cfg(all(feature = "remote-observer", windows))]
+#[path = "native_management_portfolio.rs"]
+mod native_management_portfolio;
+#[cfg(all(feature = "remote-observer", windows))]
+pub(crate) use native_management_portfolio::ManagementPortfolio;
+
+#[cfg(all(feature = "remote-observer", windows))]
+#[allow(dead_code)] // No route enabled until the independent management owner is installed.
+#[path = "native_management_transport.rs"]
+mod native_management_transport;
+#[cfg(all(feature = "remote-observer", windows))]
+#[allow(unused_imports)]
+pub(crate) use native_management_transport::ManagementRenameAdmission;
+
 #[cfg(all(feature = "remote-host", windows))]
 pub(crate) type HostDocumentAdmission<T> = (Arc<DocumentBinding<NativeRun>>, CallerIdentity, T);
 
@@ -56,7 +70,7 @@ pub(crate) fn decode_stop_query(body: &InvokeBody) -> Result<(String, RunKey), S
 pub(crate) struct NativeRuntime {
     #[cfg(all(windows, feature = "remote-host"))]
     owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
-    service: Arc<LaunchService>,
+    pub(super) service: Arc<LaunchService>,
     projections: Arc<super::native_projection::service::ProjectionService>,
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
     initialized: AtomicBool,
@@ -669,6 +683,78 @@ impl NativeRuntime {
             .map_err(|e| Stage::ScopeResponseAdmission.failure(e))?;
         Ok(value)
     }
+    /// The desktop owns these selectors; a phone request supplies only a list mode.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[allow(dead_code)]
+    pub(crate) fn retain_owner_catalogue(
+        &self,
+        caller: &CallerIdentity,
+        target: &super::native_projection::wire::ScopeTarget,
+    ) -> Result<super::native_projection::catalogue_history_source::RetainedHistory, SafeError>
+    {
+        self.binding()?.check_admitted(caller)?;
+        let source = self
+            .projections
+            .scope_diagnosed(caller, target)
+            .map_err(|_| error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE"))?;
+        self.projections
+            .retain_remote_catalogue_source(caller, source)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[allow(dead_code)]
+    pub(crate) fn read_owner_catalogue(
+        &self,
+        caller: &CallerIdentity,
+        retained: &super::native_projection::catalogue_history_source::RetainedHistory,
+        epoch: super::types::WireU64,
+        mode: cc_desk_remote_security::session_catalogue::ListMode,
+        current: impl Fn() -> Result<(), SafeError>,
+    ) -> Result<Vec<cc_desk_remote_security::session_catalogue::DisplayRow>, SafeError> {
+        self.binding()?.check_admitted(caller)?;
+        let mut rows = self
+            .projections
+            .read_remote_catalogue_source(caller, retained, epoch, &current)?;
+        current()?;
+        let source = retained.source();
+        let registry = self.service.registry();
+        match source.cli {
+            super::types::CliKind::Codex => retained.apply_owned_lifecycle(
+                &mut rows,
+                registry.codex_catalogue_lifecycle(
+                    caller,
+                    &source.profile_id,
+                    source.profile_revision,
+                    &source.source_root_key,
+                )?,
+            ),
+            super::types::CliKind::Opencode => retained.apply_opencode_owned_lifecycle(
+                &mut rows,
+                registry.opencode_catalogue_lifecycle(
+                    caller,
+                    &source.profile_id,
+                    source.profile_revision,
+                    &source.source_root_key,
+                )?,
+            ),
+            super::types::CliKind::Claude => retained.apply_claude_owned_lifecycle(
+                &mut rows,
+                registry.claude_catalogue_lifecycle(
+                    caller,
+                    &source.profile_id,
+                    source.profile_revision,
+                    &source.source_root_key,
+                )?,
+            ),
+            _ => return Err(error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE")),
+        }
+        let scope = std::collections::BTreeSet::from([retained.key()]);
+        let projection = cc_desk_remote_security::session_catalogue::list(mode, &scope, &rows)
+            .map_err(|_| error("REMOTE_CATALOGUE_SOURCE_CHANGED"))?;
+        current()?;
+        Ok(projection)
+    }
+
     pub(crate) async fn projection_read<T: Runtime>(
         &self,
         webview: &Webview<T>,

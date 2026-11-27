@@ -14,6 +14,23 @@ pub(super) struct Task {
     retired: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Task {
+    pub(super) fn new(
+        tunnel: [u8; 16],
+        phase: Arc<AtomicU8>,
+        stop: tokio::sync::watch::Sender<bool>,
+        join: tokio::task::JoinHandle<Result<(), SafeError>>,
+        retired: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self {
+            tunnel,
+            phase,
+            stop,
+            join,
+            retired,
+            result: None,
+        }
+    }
+
     pub(super) fn phase(&self) -> u8 {
         self.phase.load(Ordering::Acquire)
     }
@@ -160,7 +177,10 @@ impl Owner {
         }
         Ok(())
     }
-    async fn share_wire(&self, command: ShareCommand) -> Result<ShareResponse, SafeError> {
+    pub(super) async fn share_wire(
+        &self,
+        command: ShareCommand,
+    ) -> Result<ShareResponse, SafeError> {
         self.check()?;
         let result = control::share_request(self.control_setup()?, self.address, command).await;
         self.check()?;

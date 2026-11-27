@@ -8,8 +8,15 @@ use cc_desk_remote_record::{
     appbind::CanonicalOrigin,
     grant::{DataRole, SessionScope, encode_scope},
 };
+use cc_desk_remote_security::{
+    CancelToken, LocalIdentity, P256Spki, PeerPin, Role, Unbound,
+    catalogue_read_channel::{CataloguePair, ReadError, fetch_admitted},
+    catalogue_rendezvous::{VerifiedCatalogueOffer, VerifiedCatalogueReady},
+    session_catalogue::{DisplayRow, ListMode},
+};
 use ring::digest;
 use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 const CATALOG_DOMAIN: &[u8] = b"cc-desk.native-pairing.shares.v1\0";
 const MAX_OFFERS: usize = 4;
@@ -54,6 +61,118 @@ pub struct VerifiedOffer {
     id: [u8; 16],
     scope: SessionScope,
     label: String,
+}
+
+/// This route can only read a catalogue over its separate ALPN. Its proof
+/// is deliberately not convertible into the single-session Viewer authority.
+pub fn verify_catalogue_route_offer(
+    member: &RestoredMembership,
+    signed: &str,
+    relay_digest: [u8; 32],
+    now_unix_ms: u64,
+) -> Result<cc_desk_remote_security::catalogue_rendezvous::VerifiedCatalogueOffer, InvalidEnrollment>
+{
+    verify_catalogue_route_offer_for(
+        member,
+        signed,
+        relay_digest,
+        now_unix_ms,
+        ListMode::Sessions,
+    )
+}
+
+pub fn verify_catalogue_route_offer_for(
+    member: &RestoredMembership,
+    signed: &str,
+    relay_digest: [u8; 32],
+    now_unix_ms: u64,
+    mode: ListMode,
+) -> Result<VerifiedCatalogueOffer, InvalidEnrollment> {
+    let host = cc_desk_remote_security::P256Spki::new(member.host_spki())
+        .map_err(|_| InvalidEnrollment)?;
+    cc_desk_remote_security::catalogue_rendezvous::verify_offer_for(
+        &host,
+        member.tunnel(),
+        member.endpoint_binding(),
+        relay_digest,
+        signed,
+        now_unix_ms,
+        mode,
+    )
+    .map_err(|_| InvalidEnrollment)
+}
+
+/// A consumed, exact device selection for one read. This does not grant a
+/// session, revive a terminal lease, or admit a new relay connection.
+pub struct SelectedCatalogueRead {
+    pin: PeerPin,
+    pair: CataloguePair,
+    ready: VerifiedCatalogueReady,
+    mode: ListMode,
+}
+
+pub fn prepare_catalogue_read(
+    member: &RestoredMembership,
+    offer: &VerifiedCatalogueOffer,
+    nonce: [u8; 16],
+    signed_ready: &str,
+    now_unix_ms: u64,
+) -> Result<SelectedCatalogueRead, InvalidEnrollment> {
+    let ready = offer
+        .verify_selection(nonce, signed_ready, now_unix_ms)
+        .map_err(|_| InvalidEnrollment)?;
+    let selection = ready.selection();
+    if selection.tunnel != member.tunnel()
+        || selection.endpoint_binding != member.endpoint_binding()
+    {
+        return Err(InvalidEnrollment);
+    }
+    let host = P256Spki::new(member.host_spki()).map_err(|_| InvalidEnrollment)?;
+    Ok(SelectedCatalogueRead {
+        pin: PeerPin::new(Role::Host, host),
+        pair: CataloguePair {
+            host: member.host_id(),
+            client: member.catalogue_client_id()?,
+        },
+        ready,
+        mode: offer.mode(),
+    })
+}
+
+impl SelectedCatalogueRead {
+    /// The native route owner supplies the stream and its admitted tunnel ID.
+    /// The local key must be the endpoint key from the restored membership.
+    pub async fn fetch<S>(
+        self,
+        io: Unbound<S>,
+        identity: LocalIdentity,
+        route_tunnel: [u8; 16],
+        now_unix_ms: u64,
+        cancel: CancelToken,
+        mode: ListMode,
+    ) -> Result<Vec<DisplayRow>, ReadError>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+        if mode != self.mode
+            || identity.role() != Role::Client
+            || identity.endpoint_id() != self.pair.client
+        {
+            return Err(ReadError::Denied);
+        }
+        fetch_admitted(
+            io,
+            identity,
+            self.pin,
+            self.pair,
+            route_tunnel,
+            self.ready,
+            now_unix_ms,
+            cancel,
+            mode,
+        )
+        .await
+    }
 }
 
 impl VerifiedCatalog {
@@ -274,6 +393,124 @@ mod tests {
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|n| format!("{n:02x}")).collect()
     }
+    #[tokio::test]
+    async fn selected_catalogue_reads_only_from_the_paired_desktop() {
+        use cc_desk_remote_security::{
+            LocalIdentity, P256Spki, PeerPin, Role, Unbound, cancellation,
+            catalogue_read_channel::{CataloguePair, serve},
+            catalogue_rendezvous::{CatalogueOffer, CatalogueReady},
+            session_catalogue::{DisplayLifecycle, DisplayRow, ListMode},
+        };
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let rng = SystemRandom::new();
+        let identity = |role| {
+            let pkcs =
+                EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+            let key =
+                EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs.as_ref(), &rng)
+                    .unwrap();
+            let signer = rustls::crypto::ring::sign::any_supported_type(&PrivateKeyDer::Pkcs8(
+                PrivatePkcs8KeyDer::from(pkcs.as_ref()),
+            ))
+            .unwrap();
+            let der: [u8; 91] = signer.public_key().unwrap().as_ref().try_into().unwrap();
+            let pin = P256Spki::new(&der).unwrap();
+            (
+                key,
+                der,
+                PeerPin::new(role, pin.clone()),
+                LocalIdentity::new(role, pin, signer).unwrap(),
+            )
+        };
+        let (host_key, host_der, host_pin, host_id) = identity(Role::Host);
+        let (_, client_der, client_pin, client_id) = identity(Role::Client);
+        let member = crate::enrollment::test_pinned_catalogue_membership(host_der, client_der);
+        let pair = CataloguePair {
+            host: host_pin.endpoint_id(),
+            client: client_pin.endpoint_id(),
+        };
+        let sign = |message: &[u8]| {
+            host_key
+                .sign(&rng, message)
+                .unwrap()
+                .as_ref()
+                .try_into()
+                .unwrap()
+        };
+        let offer = CatalogueOffer {
+            tunnel: member.tunnel(),
+            endpoint_binding: member.endpoint_binding(),
+            offer: [8; 16],
+            expires_unix_ms: 5_000,
+        };
+        let offer_wire = offer.envelope(sign(&offer.signing_message()));
+        let digest = digest::digest(&digest::SHA256, offer_wire.as_bytes())
+            .as_ref()
+            .try_into()
+            .unwrap();
+        let offer = verify_catalogue_route_offer(&member, &offer_wire, digest, 1_000).unwrap();
+        let nonce = [9; 16];
+        let ready = CatalogueReady {
+            selection: offer.selection(nonce),
+            expires_unix_ms: 4_000,
+        };
+        let wire = ready.envelope(sign(&ready.signing_message()));
+
+        assert!(prepare_catalogue_read(&member, &offer, [10; 16], &wire, 1_000).is_err());
+        assert!(prepare_catalogue_read(&member, &offer, nonce, &wire, 4_000).is_err());
+        let (_, _, _, unpaired) = identity(Role::Client);
+        let denied = prepare_catalogue_read(&member, &offer, nonce, &wire, 1_000).unwrap();
+        let (unused, _peer) = tokio::io::duplex(64);
+        let (_cancel, token) = cancellation();
+        assert_eq!(
+            denied
+                .fetch(
+                    Unbound::new(unused),
+                    unpaired,
+                    member.tunnel(),
+                    1_000,
+                    token,
+                    ListMode::Sessions
+                )
+                .await,
+            Err(cc_desk_remote_security::catalogue_read_channel::ReadError::Denied),
+        );
+
+        let selected = prepare_catalogue_read(&member, &offer, nonce, &wire, 1_000).unwrap();
+        let (a, b) = tokio::io::duplex(8192);
+        let (_ha, hc) = cancellation();
+        let (_ca, cc) = cancellation();
+        let expected = DisplayRow {
+            lifecycle: DisplayLifecycle::Closed,
+            title: "Closed session".into(),
+        };
+        let (served, rows) = tokio::join!(
+            serve(
+                Unbound::new(a),
+                host_id,
+                client_pin,
+                pair,
+                hc,
+                |candidate| std::future::ready(candidate == pair),
+                |mode| {
+                    assert_eq!(mode, ListMode::Sessions);
+                    std::future::ready(Ok(vec![expected.clone()]))
+                }
+            ),
+            selected.fetch(
+                Unbound::new(b),
+                client_id,
+                member.tunnel(),
+                1_000,
+                cc,
+                ListMode::Sessions
+            ),
+        );
+        assert_eq!(served, Ok(()));
+        assert_eq!(rows.unwrap(), vec![expected]);
+    }
+
     #[test]
     fn real_p256_offer_and_ready_are_bound_to_role_exact_scope_selection_and_tunnel() {
         let rng = SystemRandom::new();

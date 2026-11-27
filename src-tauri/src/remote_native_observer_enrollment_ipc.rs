@@ -75,6 +75,16 @@ enum Action {
         target: DeviceTarget,
         runs: Vec<ShareRun>,
     },
+    StartCatalogueRead {
+        ticket: String,
+        target: DeviceTarget,
+        scope: crate::cli::native_projection::wire::ScopeTarget,
+        mode: Option<cc_desk_remote_security::session_catalogue::ListMode>,
+    },
+    StartManagement {
+        ticket: String,
+        target: DeviceTarget,
+    },
     StopSharing {
         ticket: String,
     },
@@ -297,6 +307,31 @@ pub(crate) async fn remote_native_observer_setup(
                 .collect::<Result<Vec<_>, SafeError>>()?;
             return owner
                 .start_sharing(target, targets, app, &window)
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
+        }
+        Action::StartCatalogueRead {
+            ticket,
+            target,
+            scope,
+            mode,
+        } => {
+            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            return owner
+                .start_catalogue_read(
+                    target,
+                    scope,
+                    mode.unwrap_or(cc_desk_remote_security::session_catalogue::ListMode::Sessions),
+                    app,
+                    &window,
+                )
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
+        }
+        Action::StartManagement { ticket, target } => {
+            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            return owner
+                .start_management_rename(target, app, &window)
                 .await
                 .map(|snapshot| Reply::Snapshot { snapshot });
         }

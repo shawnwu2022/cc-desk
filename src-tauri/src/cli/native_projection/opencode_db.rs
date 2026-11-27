@@ -432,9 +432,9 @@ fn append_project(
         .collect();
     // 原生 archive 是元数据位，和 Desk 归档索引独立；旧可读 schema 缺该列时仍可读。
     let archive = if table_columns(tx, table)?.contains("time_archived") {
-        "time_archived IS NOT NULL AND time_archived != 0"
+        "CASE WHEN time_archived IS NULL OR (typeof(time_archived) = 'integer' AND time_archived >= 0) THEN time_archived IS NOT NULL AND time_archived != 0 END"
     } else {
-        "0"
+        "NULL"
     };
     // 表名来自 session_table 的白名单二选一，不是外部输入。
     let sql = format!(
@@ -502,7 +502,7 @@ fn append_rows(
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
-                row.get::<_, bool>(5)?,
+                row.get::<_, Option<bool>>(5)?,
             ))
         })
         .map_err(sqlite_code)?;
@@ -551,7 +551,7 @@ fn push_session(
     directory: String,
     created_ms: i64,
     updated_ms: i64,
-    archived: bool,
+    archived: Option<bool>,
     budget: &mut Budget,
 ) {
     let invalid_title = title.contains('\0');
@@ -576,7 +576,8 @@ fn push_session(
         metadata_incomplete: truncated.then_some(true),
         read_failure: None,
         truncated,
-        archived,
+        archived: archived.unwrap_or(false),
+        opencode_archive: archived.map(|state| (state, project.root.key().to_owned())),
         cwd: Some(directory),
         updated_at: rfc3339(updated_ms),
         created_at: rfc3339(created_ms),

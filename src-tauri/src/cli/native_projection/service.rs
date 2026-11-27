@@ -14,6 +14,13 @@ use crate::cli::workspace::RegisteredProject;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(all(windows, feature = "remote-observer"))]
+#[path = "management_rename.rs"]
+mod management_rename;
+#[cfg(all(windows, feature = "remote-observer"))]
+#[allow(unused_imports)]
+pub(crate) use management_rename::{CurrentManagementPeer, RemoteRenameGrant};
+
 pub(crate) struct ProjectionService {
     launch: Arc<LaunchService>,
     registry: ScopeRegistry,
@@ -28,6 +35,18 @@ impl ProjectionService {
         caller: &CallerIdentity,
         request: crate::cli::opencode_archive::Request,
     ) -> Result<crate::cli::opencode_archive::Receipt, SafeError> {
+        self.set_opencode_archive_guarded(caller, request, None)
+    }
+
+    fn set_opencode_archive_guarded(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::opencode_archive::Request,
+        fence: Option<crate::cli::native_rename::RenameFence>,
+    ) -> Result<crate::cli::opencode_archive::Receipt, SafeError> {
+        if let Some(check) = &fence {
+            check()?;
+        }
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
         self.opencode_archive_operations
@@ -48,8 +67,16 @@ impl ProjectionService {
                     &request.source,
                     &request.session_key,
                 )?;
-                self.launch
-                    .set_opencode_archive(caller, &request, authority, pinned)?;
+                self.launch.set_opencode_archive(
+                    caller,
+                    &request,
+                    authority,
+                    pinned,
+                    fence.clone(),
+                )?;
+                if let Some(check) = &fence {
+                    check().map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))?;
+                }
                 self.launch
                     .registry()
                     .check_caller(caller)
@@ -452,6 +479,19 @@ impl ProjectionService {
         request: crate::cli::native_archive::ArchiveRequest,
         trace: Option<&crate::cli::activity_diagnostics::Trace>,
     ) -> Result<crate::cli::native_archive::ArchiveReceipt, SafeError> {
+        self.archive_observed_guarded(caller, request, trace, None)
+    }
+
+    fn archive_observed_guarded(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_archive::ArchiveRequest,
+        trace: Option<&crate::cli::activity_diagnostics::Trace>,
+        fence: Option<crate::cli::native_rename::RenameFence>,
+    ) -> Result<crate::cli::native_archive::ArchiveReceipt, SafeError> {
+        if let Some(check) = &fence {
+            check()?;
+        }
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
         if !cfg!(windows) {
@@ -526,13 +566,16 @@ impl ProjectionService {
                 rows: 24,
             };
             self.launch
-                .archive_metadata(caller, &launch, authority, trace.cloned())
+                .archive_metadata(caller, &launch, authority, trace.cloned(), fence.clone())
         })();
         self.registry
             .retire_archive_hint(&request.source, &request.session_key);
         self.archive_operations
             .finish(caller, &request, result.clone());
         result?;
+        if let Some(check) = &fence {
+            check().map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))?;
+        }
         self.launch.registry().check_caller(caller)?;
         Ok(request.receipt())
     }
@@ -551,6 +594,19 @@ impl ProjectionService {
         request: crate::cli::native_rename::RenameRequest,
         trace: Option<&crate::cli::activity_diagnostics::Trace>,
     ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
+        self.rename_observed_guarded(caller, request, trace, None)
+    }
+
+    fn rename_observed_guarded(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_rename::RenameRequest,
+        trace: Option<&crate::cli::activity_diagnostics::Trace>,
+        fence: Option<crate::cli::native_rename::RenameFence>,
+    ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
+        if let Some(check) = &fence {
+            check()?;
+        }
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
         self.rename_operations
@@ -581,17 +637,21 @@ impl ProjectionService {
                 cols: 80,
                 rows: 24,
             };
-            self.launch.rename_metadata_observed(
+            self.launch.rename_metadata_guarded(
                 caller,
                 &launch,
                 authority,
                 request.title.clone(),
                 trace.cloned(),
+                fence.clone(),
             )
         })();
         self.rename_operations
             .finish(caller, &request, result.clone());
         result?;
+        if let Some(check) = &fence {
+            check().map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
+        }
         self.launch.registry().check_caller(caller)?;
         Ok(request.receipt())
     }
@@ -888,6 +948,84 @@ impl ProjectionService {
         }
         self.registry.read(&owner(caller), request)
     }
+    /// Internal only: the host must retain this after admitting the exact
+    /// paired device's sources, never from a peer-supplied selector.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[allow(dead_code)]
+    pub(crate) fn retain_remote_catalogue_source(
+        &self,
+        caller: &CallerIdentity,
+        source: SourceRef,
+    ) -> Result<super::catalogue_history_source::RetainedHistory, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        self.registry.check_source(&owner(caller), &source)?;
+        super::catalogue_history_source::RetainedHistory::from_owner_scope(source)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[allow(dead_code)]
+    pub(crate) fn read_remote_catalogue_source(
+        &self,
+        caller: &CallerIdentity,
+        retained: &super::catalogue_history_source::RetainedHistory,
+        epoch: crate::cli::types::WireU64,
+        check_pair: impl Fn() -> Result<(), SafeError>,
+    ) -> Result<Vec<cc_desk_remote_security::session_catalogue::SourceRow>, SafeError> {
+        Ok(self
+            .read_remote_scoped_history(caller, retained, epoch, check_pair)?
+            .into_iter()
+            .map(|row| row.display)
+            .collect())
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn read_remote_scoped_history(
+        &self,
+        caller: &CallerIdentity,
+        retained: &super::catalogue_history_source::RetainedHistory,
+        epoch: crate::cli::types::WireU64,
+        check_pair: impl Fn() -> Result<(), SafeError>,
+    ) -> Result<Vec<super::catalogue_history_source::ScopedHistoryRow>, SafeError> {
+        let caller_owner = owner(caller);
+        let snapshot = || -> Result<Option<super::catalogue_history_source::ClaudeArchiveSnapshot>,SafeError> {
+            if retained.source().cli != CliKind::Claude {return Ok(None);}
+            use super::catalogue_history_source::{ClaudeArchiveProject,ClaudeArchiveSnapshot};
+            let ScopeTarget::Profile {project_ids,..} = &retained.source().target else {return Err(error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE"));};
+            let repository = self.launch.repository().read()?;
+            let mut projects = std::collections::BTreeMap::new();
+            for id in project_ids {
+                let project = repository.registered_projects.get(id).ok_or_else(||error("PROJECT_NOT_FOUND"))?;
+                if project.host_id != "local" {return Err(error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE"));}
+                let (root, paths) = admit_project(project)?;
+                let aliases = paths.iter().map(|p|p.to_str().map(crate::store::normalize_path_str).ok_or_else(||error("SOURCE_INVALID")))
+                    .collect::<Result<_,_>>()?;
+                projects.insert(id.clone(),ClaudeArchiveProject {root:root.key().to_owned(), aliases});
+            }
+            let (data,lock)=crate::store::data_and_lock_paths().map_err(|_|error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE"))?;
+            let stored=crate::store::read_projects_state_locked(&data,&lock).map_err(|_|error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE"))?;
+            ClaudeArchiveSnapshot::new(projects,stored.archived_sessions).map(Some)
+        };
+        check_pair()?;
+        let before = snapshot()?;
+        let rows = retained.read_scoped_history(
+            epoch,
+            || {
+                check_pair()?;
+                self.launch.registry().check_caller(caller)?;
+                self.registry.check_source(&caller_owner, retained.source())
+            },
+            // Local history read also reconciles the archive mutation journal.
+            // The paired read must not invoke that local recovery side effect.
+            |request| self.registry.read(&caller_owner, request),
+            before.as_ref(),
+        )?;
+        check_pair()?;
+        if before.is_some() && snapshot()? != before {
+            return Err(error("REMOTE_CATALOGUE_SOURCE_CHANGED"));
+        }
+        Ok(rows)
+    }
+
     pub(crate) fn check_caller(&self, caller: &CallerIdentity) -> Result<(), SafeError> {
         self.launch.registry().check_caller(caller)
     }

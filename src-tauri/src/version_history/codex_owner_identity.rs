@@ -39,11 +39,53 @@ impl CodexOwnerIdentity {
             _ => Err(error("ARCHIVE_BUSY")),
         }
     }
+    /// Only a single authenticated hook identity can label a catalogue row.
+    /// A requested resume ID by itself is not provider evidence.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn catalogue_primary(&self) -> Option<uuid::Uuid> {
+        let snapshot = self.archive_snapshot().ok()?;
+        let ids = snapshot.ids?;
+        let id = *ids.first()?;
+        (snapshot.observed
+            && ids.len() == 1
+            && !id.is_nil()
+            && snapshot
+                .requested_id
+                .is_none_or(|requested| requested == id))
+        .then_some(id)
+    }
+
     pub(crate) fn sessions(&self) -> Result<BTreeSet<uuid::Uuid>, SafeError> {
         let state = self.archive_snapshot()?;
         if !state.observed {
             return Err(error("ARCHIVE_BUSY"));
         }
         state.ids.ok_or_else(|| error("ARCHIVE_BUSY"))
+    }
+}
+
+#[cfg(all(test, windows, feature = "remote-observer"))]
+mod catalogue_tests {
+    use super::*;
+
+    #[test]
+    fn codex_catalogue_requires_a_single_root_observed_for_the_original_attempt() {
+        let expected = uuid::Uuid::from_u128(1);
+        let other = uuid::Uuid::from_u128(2);
+        let owner = CodexOwnerIdentity::new(Some(expected));
+        assert_eq!(owner.catalogue_primary(), None);
+        owner.observe(other);
+        assert_eq!(owner.catalogue_primary(), None);
+
+        let owner = CodexOwnerIdentity::new(Some(expected));
+        owner.observe(expected);
+        owner.observe(expected);
+        assert_eq!(owner.catalogue_primary(), Some(expected));
+        owner.observe(other);
+        assert_eq!(owner.catalogue_primary(), None);
+
+        let owner = CodexOwnerIdentity::new(None);
+        owner.observe(uuid::Uuid::nil());
+        assert_eq!(owner.catalogue_primary(), None);
     }
 }

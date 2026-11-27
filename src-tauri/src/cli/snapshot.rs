@@ -46,6 +46,8 @@ pub(crate) struct LaunchSnapshot {
     observer_requested: bool,
     observer_plugin: Option<PathBuf>,
     identity_args: Vec<OsString>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    claude_new_id: Option<uuid::Uuid>,
     #[cfg(windows)]
     codex_cmd: Option<std::sync::Arc<super::codex_cmd::Transport>>,
     #[cfg(windows)]
@@ -90,6 +92,32 @@ impl LaunchSnapshot {
             && !self.default_args.iter().any(|arg| arg == "--")
             && !self.extra_args.iter().any(|arg| arg == "--")
     }
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn with_claude_catalogue_id(&self, id: uuid::Uuid) -> Option<Self> {
+        if id.is_nil()
+            || self.request.cli != CliKind::Claude
+            || self.request.action != LaunchAction::New
+            || self.observer_plugin.is_none()
+            || self.raw_args.is_some()
+            || !self.default_args.is_empty()
+            || !self.extra_args.is_empty()
+            || self
+                .legacy_default_args
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+        {
+            return None;
+        }
+        let mut next = self.clone();
+        next.claude_new_id = Some(id);
+        Some(next)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn claude_catalogue_id(&self) -> Option<uuid::Uuid> {
+        self.claude_new_id
+    }
+
     pub(crate) fn identity_args(&self) -> &[OsString] {
         &self.identity_args
     }
@@ -440,6 +468,8 @@ pub(crate) fn freeze_launch(
             && !request.extra_args.iter().any(|arg| arg == "--"),
         observer_plugin: None,
         identity_args: Vec::new(),
+        #[cfg(all(windows, feature = "remote-observer"))]
+        claude_new_id: None,
         #[cfg(windows)]
         codex_cmd: None,
         #[cfg(windows)]

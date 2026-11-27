@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.7] - 2026-11-27
+
+### Added
+
+- Add bounded Android management of Windows Desk-owned Codex, Claude Code and OpenCode sessions across verified local projects: rename, archive, restore, close and read-only live reconnect.
+- Keep archived sessions out of the ordinary list. Authorize a specific paired phone once for a short management window.
+
+### Limits
+
+- Test-channel only. Existing stable and production relay behavior is unchanged. Reconnect does not authorize terminal input.
+
 ## [0.28.0-rc.6] - 2026-11-26
 
 ### Fixed

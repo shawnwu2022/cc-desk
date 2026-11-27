@@ -9,9 +9,10 @@ use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 pub(in crate::local_writer) mod producer;
 pub use crate::local_writer::Reject as NativeIoError;
 pub use producer::{
-    NativeCanonicalStatus, NativeFrameResult, NativeLocalInput, NativeOriginalIo,
-    NativeOutputIngress, NativeProtocolResult, NativeRunProducer, NativeWriterRetirement,
-    ObserverCapture, ObserverSnapshotSent, ObserverSnapshotTransfer, PendingObserverCapture,
+    ManagementProjection, NativeCanonicalStatus, NativeFrameResult, NativeLocalInput,
+    NativeOriginalIo, NativeOutputIngress, NativeProtocolResult, NativeRunProducer,
+    NativeWriterRetirement, ObserverCapture, ObserverSnapshotSent, ObserverSnapshotTransfer,
+    PendingManagementProjection, PendingObserverCapture,
 };
 
 const MAX_ATTEMPTS: usize = 64;

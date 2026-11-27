@@ -20,6 +20,9 @@ cc-desk-remote-client = { path = "../../remote/crates/client" }
 cc-desk-remote-transport = { path = "../../remote/crates/transport" }
 tokio = { version = "=1.52.1", features = ["rt", "sync", "time", "macros"] }
 
+[dev-dependencies]
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "=0.21.1", default-features = false }
 coset = "=0.4.2"

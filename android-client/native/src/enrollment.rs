@@ -567,6 +567,12 @@ impl RestoredMembership {
     pub fn tunnel(&self) -> [u8; 16] {
         self.0.metadata.tunnel
     }
+    pub(crate) fn catalogue_client_id(&self) -> Result<[u8; 32], InvalidEnrollment> {
+        P256Spki::new(&self.0.phone_endpoint_spki)
+            .map(|key| key.endpoint_id(Role::Client))
+            .map_err(|_| InvalidEnrollment)
+    }
+
     pub fn relay_id(&self) -> [u8; 16] {
         self.0.metadata.phone_id
     }
@@ -599,12 +605,20 @@ impl RestoredMembership {
 
 #[cfg(test)]
 pub(crate) fn test_pinned_membership(spki: [u8; 91]) -> RestoredMembership {
+    test_pinned_catalogue_membership(spki, spki)
+}
+
+#[cfg(test)]
+pub(crate) fn test_pinned_catalogue_membership(
+    spki: [u8; 91],
+    phone_spki: [u8; 91],
+) -> RestoredMembership {
     let pin = P256Spki::new(&spki).unwrap();
     RestoredMembership(VerifiedEnrollment {
         host_endpoint: pin.clone(),
         host_endpoint_spki: spki,
         phone_grant: pin,
-        phone_endpoint_spki: spki,
+        phone_endpoint_spki: phone_spki,
         code_sha256: [1; 32],
         phone_outer: String::new(),
         host_outer: String::new(),

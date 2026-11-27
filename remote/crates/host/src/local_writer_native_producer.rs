@@ -7,7 +7,8 @@ use std::sync::OnceLock;
 #[path = "local_writer_observer_capture.rs"]
 mod observer_capture;
 pub use observer_capture::{
-    ObserverCapture, ObserverSnapshotSent, ObserverSnapshotTransfer, PendingObserverCapture,
+    ManagementProjection, ObserverCapture, ObserverSnapshotSent, ObserverSnapshotTransfer,
+    PendingManagementProjection, PendingObserverCapture,
 };
 
 static NATIVE_VIEW_BUDGET: OnceLock<HostViewBudget> = OnceLock::new();

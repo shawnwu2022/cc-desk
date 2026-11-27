@@ -264,7 +264,7 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeAndroid
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeLoadShares(
-    mut env: JNIEnv<'_>,
+    env: JNIEnv<'_>,
     _class: JClass<'_>,
     facade: jni::objects::JObject<'_>,
     local_id: jni::objects::JByteArray<'_>,
@@ -273,8 +273,137 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeLoadSha
     relay: jni::objects::JByteArray<'_>,
     approval: jni::objects::JByteArray<'_>,
 ) -> jlong {
+    load_share_list(
+        env, facade, local_id, origin, endpoint, relay, approval, false, false,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeLoadArchivedShares(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    facade: jni::objects::JObject<'_>,
+    local_id: jni::objects::JByteArray<'_>,
+    origin: jni::objects::JString<'_>,
+    endpoint: jni::objects::JByteArray<'_>,
+    relay: jni::objects::JByteArray<'_>,
+    approval: jni::objects::JByteArray<'_>,
+) -> jlong {
+    load_share_list(
+        env, facade, local_id, origin, endpoint, relay, approval, true, false,
+    )
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeLoadManagementList(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    facade: jni::objects::JObject<'_>,
+    local_id: jni::objects::JByteArray<'_>,
+    origin: jni::objects::JString<'_>,
+    endpoint: jni::objects::JByteArray<'_>,
+    relay: jni::objects::JByteArray<'_>,
+    approval: jni::objects::JByteArray<'_>,
+    archived: jni::sys::jboolean,
+) -> jlong {
+    load_share_list(
+        env,
+        facade,
+        local_id,
+        origin,
+        endpoint,
+        relay,
+        approval,
+        archived == jni::sys::JNI_TRUE,
+        true,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeManagementRows(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jni::sys::jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let text = crate::android_shares::management_rows(id)?;
+        Some(env.new_string(text).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or_else(ptr::null_mut)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeSubmitManagement(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+    reference: jni::objects::JByteArray<'_>,
+    action: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let allowed = catch_unwind(AssertUnwindSafe(|| {
+        use cc_desk_remote_security::{
+            session_management::ManagementAction, session_management_channel::ManagementRequest,
+        };
+        let reference = exact_bytes(&env, &reference)?;
+        if reference == [0; 32] || !(1..=2048).contains(&env.get_array_length(&action).ok()?) {
+            return None;
+        }
+        let action = ManagementAction::decode(&env.convert_byte_array(&action).ok()?).ok()?;
+        crate::android_shares::submit_management(id, ManagementRequest { reference, action })
+    }))
+    .ok()
+    .flatten()
+    .is_some();
+    if allowed {
+        jni::sys::JNI_TRUE
+    } else {
+        jni::sys::JNI_FALSE
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeManagementProjection(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jni::sys::jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let text = crate::android_shares::management_projection(id)?;
+        Some(env.new_string(text).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or_else(ptr::null_mut)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeManagementOutcome(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jint {
+    catch_unwind(|| crate::android_shares::management_result(id))
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_share_list(
+    mut env: JNIEnv<'_>,
+    facade: jni::objects::JObject<'_>,
+    local_id: jni::objects::JByteArray<'_>,
+    origin: jni::objects::JString<'_>,
+    endpoint: jni::objects::JByteArray<'_>,
+    relay: jni::objects::JByteArray<'_>,
+    approval: jni::objects::JByteArray<'_>,
+    archived: bool,
+    management: bool,
+) -> jlong {
     catch_unwind(AssertUnwindSafe(|| {
         use cc_desk_remote_record::appbind::CanonicalOrigin;
+        use cc_desk_remote_security::session_catalogue::ListMode;
         if facade.is_null() || origin.is_null() {
             return None;
         }
@@ -285,6 +414,12 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeLoadSha
         }
         let input = crate::android_shares::Inputs {
             origin,
+            management,
+            mode: if archived {
+                ListMode::Archived
+            } else {
+                ListMode::Sessions
+            },
             local: exact_bytes(&env, &local_id)?,
             endpoint: exact_bytes(&env, &endpoint)?,
             relay: exact_bytes(&env, &relay)?,
@@ -318,6 +453,21 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeShareOf
 ) -> jni::sys::jstring {
     catch_unwind(AssertUnwindSafe(|| {
         let text = crate::android_shares::offers(id)?;
+        Some(env.new_string(text).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or_else(ptr::null_mut)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeCatalogueRows(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    id: jlong,
+) -> jni::sys::jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let text = crate::android_shares::catalogue_rows(id)?;
         Some(env.new_string(text).ok()?.into_raw())
     }))
     .ok()

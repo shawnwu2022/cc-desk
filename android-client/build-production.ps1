@@ -108,7 +108,7 @@ if ($Phase -ceq 'Build') {
         ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
     $requiredMethods = @('nativeViewerRole','nativeTakeControllerFrame','nativeConfirmControllerFrame','nativeQueueControllerText','nativeQueueControllerKey','nativeControllerInputOutcome','nativeAndroidAbiVersion','nativeBeginPairing','nativePairingState','nativePairingHostId','nativeCancelPairing',
         'nativeReadPairedHostId','nativeObserverState','nativeCancelObserver','nativeTakeObserverText',
-        'nativeLoadShares','nativeShareState','nativeShareOffers','nativeChooseShare','nativeShareObserverHandle','nativeCancelShares')
+        'nativeLoadShares','nativeLoadArchivedShares','nativeShareState','nativeShareOffers','nativeCatalogueRows','nativeChooseShare','nativeShareObserverHandle','nativeCancelShares')
     Require (@($requiredMethods | Where-Object { $_ -cnotin $methods }).Count -eq 0) 'Incomplete integrated Java pairing, share selection or Observer JNI surface'
 
     $manifest = [xml](Get-Content -LiteralPath "$root/AndroidManifest.xml" -Raw)

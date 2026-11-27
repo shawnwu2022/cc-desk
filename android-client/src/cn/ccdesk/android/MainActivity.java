@@ -22,6 +22,8 @@ public final class MainActivity extends Activity {
     private RemoteHomeView home;
     private SessionBrowser sessionBrowser;
     private boolean showingSessions;
+    private boolean projectionForeground;
+    private final java.util.Map<UUID, TextView> managementViewports = new java.util.HashMap<>();
     private boolean lastHomeSessions;
     private UUID lastHomeSelection;
     private DesktopStore store;
@@ -56,7 +58,8 @@ public final class MainActivity extends Activity {
         getWindow().setDecorFitsSystemWindows(false);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         store = new DesktopStore(this);
-        backend = NativeDesktopBackend.load(this, store, this::updateConnectionViews);
+        backend = NativeDesktopBackend.load(this, store, this::updateConnectionViews,
+            this::updateManagementProjection);
         String last = getPreferences(MODE_PRIVATE).getString("selected", null);
         if (last != null) {
             try { selected = UUID.fromString(last); }
@@ -92,6 +95,7 @@ public final class MainActivity extends Activity {
             return;
         }
         sessionBrowser = null;
+        managementViewports.clear();
         RemoteHomeView previous = home;
         int scrollY = previous != null && lastHomeSessions == showingSessions
             && java.util.Objects.equals(lastHomeSelection, selected) ? previous.scroll.getScrollY() : 0;
@@ -376,15 +380,22 @@ public final class MainActivity extends Activity {
     }
 
     private boolean canRefresh(DesktopBackend.State state) {
-        return state == DesktopBackend.State.DISCONNECTED || state == DesktopBackend.State.UNAVAILABLE;
+        return state == DesktopBackend.State.DISCONNECTED || state == DesktopBackend.State.UNAVAILABLE
+            || state == DesktopBackend.State.CATALOGUE_READY;
     }
 
     private void refreshDesktop(DesktopBackend.Desktop desktop) {
         if (canUseDesktop(desktop) && canRefresh(backend.state(desktop))) backend.loadShares(desktop, identities);
     }
 
+    private void loadArchived(DesktopBackend.Desktop desktop) {
+        if (canUseDesktop(desktop) && canRefresh(backend.state(desktop)))
+            backend.loadShares(desktop, identities, true);
+    }
+
     private boolean isEngaged(DesktopBackend.State state) {
-        return state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.CONTROLLING;
+        return state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.CONTROLLING
+            || state == DesktopBackend.State.MANAGEMENT_VIEWING;
     }
 
     private String deviceStatus(DesktopBackend.State state) {
@@ -394,13 +405,17 @@ public final class MainActivity extends Activity {
     private SessionSearchCoverage.Device searchCoverageFor(DesktopBackend.State state) {
         switch (state) {
             case SHARES_READY:
+            case CATALOGUE_READY:
+            case MANAGEMENT_READY:
                 return SessionSearchCoverage.Device.LOADED;
             case OBSERVING:
             case CONTROLLING:
+            case MANAGEMENT_VIEWING:
                 return SessionSearchCoverage.Device.ACTIVE_ONLY;
             case WAITING_FOR_DESKTOP:
             case LOADING_SHARES:
             case AWAITING_OBSERVER:
+            case MANAGEMENT_WAITING:
                 return SessionSearchCoverage.Device.LOADING;
             default:
                 return SessionSearchCoverage.Device.NOT_CONNECTED;
@@ -423,11 +438,16 @@ public final class MainActivity extends Activity {
             ? backend.shareOffers(desktop) : java.util.Collections.emptyList();
         List<DesktopBackend.Session> snapshots = state == DesktopBackend.State.OBSERVING
             ? backend.observerSessions(desktop) : java.util.Collections.emptyList();
+        List<NativeDesktopBackend.CatalogueRow> catalogue = backend.catalogueRows(desktop);
+        List<NativeDesktopBackend.ManagementItem> manageable = backend.managementRows(desktop);
         boolean matched = nameMatches
+            || manageable.stream().anyMatch(row -> SessionTitleFilter.matches(query, name, row.title))
+            || catalogue.stream().anyMatch(row -> SessionTitleFilter.matches(query, name, row.title))
             || offers.stream().anyMatch(offer -> SessionTitleFilter.matches(query, name, offer.label))
             || snapshots.stream().anyMatch(session -> SessionTitleFilter.matches(query, name, session.title));
         boolean hasLiveAction = isEngaged(state) || state == DesktopBackend.State.LOADING_SHARES
-            || state == DesktopBackend.State.AWAITING_OBSERVER;
+            || state == DesktopBackend.State.AWAITING_OBSERVER
+            || state == DesktopBackend.State.MANAGEMENT_READY || state == DesktopBackend.State.MANAGEMENT_WAITING;
         SessionSearchCoverage.Device coverageState = searchCoverageFor(state);
         if (!matched && !hasLiveAction) {
             coverage.add(coverageState);
@@ -438,10 +458,78 @@ public final class MainActivity extends Activity {
         home.title(card, name, 20, true);
         home.status(card, deviceStatus(state), isEngaged(state));
         switch (state) {
+            case MANAGEMENT_READY:
+                if (manageable.isEmpty()) home.body(card, backend.managementArchived(desktop)
+                    ? "没有可管理的归档会话" : "没有可管理的会话", 15);
+                for (boolean archived : new boolean[]{false, true}) {
+                    boolean heading = false;
+                    for (NativeDesktopBackend.ManagementItem row : manageable) {
+                        if (row.archived != archived || !SessionTitleFilter.matches(query, name, row.title)) continue;
+                        if (!heading) {
+                            home.title(card, archived ? "归档会话" : "普通会话", 16, true);
+                            heading = true;
+                        }
+                        home.title(card, row.title, 16, false);
+                        if (!archived) {
+                            home.body(card, "open".equals(row.lifecycle) ? "打开" : "已关闭", 14);
+                            home.action(card, "改名", false, () -> editManagedTitle(desktop, row));
+                        }
+                        if (!"open".equals(row.lifecycle))
+                            home.action(card, archived ? "恢复" : "归档", false, () -> backend.changeManagementArchive(desktop, row));
+                        else if (!archived) {
+                            home.action(card, "接回原会话", true, () -> backend.reconnectManagementRun(desktop, row));
+                            home.action(card, "关闭会话", false, () -> confirmManagedClose(desktop, row));
+                        }
+                    }
+                }
+                home.action(card, "关闭管理", false, () -> backend.disconnectObserver(desktop));
+                break;
+            case MANAGEMENT_VIEWING:
+                home.action(card, "退出查看", false, () -> backend.disconnectObserver(desktop));
+                home.body(card, "正在查看原会话 · 只读", 15);
+                String projection = projectionForeground ? backend.managementProjection(desktop) : null;
+                if (projection != null) {
+                    android.widget.HorizontalScrollView grid = new android.widget.HorizontalScrollView(this);
+                    grid.setSaveEnabled(false);
+                    card.addView(grid);
+                    TextView viewport = new TextView(this);
+                    viewport.setSaveEnabled(false);
+                    viewport.setTypeface(android.graphics.Typeface.MONOSPACE);
+                    viewport.setTextSize(14);
+                    viewport.setText(projection);
+                    grid.addView(viewport);
+                    managementViewports.put(desktop.localId, viewport);
+                }
+                break;
+            case MANAGEMENT_WAITING:
+                home.body(card, "正在等待桌面处理", 15);
+                home.action(card, "断开", false, () -> backend.disconnectObserver(desktop));
+                break;
             case DISCONNECTED:
             case UNAVAILABLE:
+                int managementResult = backend.managementOutcome(desktop);
+                if (managementResult != 0) home.body(card, managementResult == 1 ? "操作已完成"
+                    : (managementResult == 2 ? "操作未获授权" : "结果尚未确认，请刷新核对，不会自动重试"), 15);
+                home.action(card, "管理会话", false, () -> backend.loadManagement(desktop, identities));
+                home.action(card, "管理归档", false, () -> backend.loadArchivedManagement(desktop, identities));
                 home.body(card, "刷新以检查这台电脑可用的会话。", 15);
                 home.action(card, "刷新这台电脑", false, () -> refreshDesktop(desktop));
+                home.action(card, "查看归档", false, () -> loadArchived(desktop));
+                break;
+            case CATALOGUE_READY:
+                boolean archiveCatalogue = backend.archiveCatalogue(desktop);
+                if (archiveCatalogue) home.title(card, "归档会话（只读）", 16, true);
+                if (catalogue.isEmpty()) home.body(card, archiveCatalogue ? "没有可查看的归档会话。" : "没有可查看的会话。", 15);
+                for (NativeDesktopBackend.CatalogueRow row : catalogue) {
+                    if (!SessionTitleFilter.matches(query, name, row.title)) continue;
+                    home.title(card, row.title, 16, false);
+                    home.body(card, "open".equals(row.lifecycle) ? "打开" :
+                        ("closed".equals(row.lifecycle) ? "已关闭" : "历史"), 14);
+                }
+                home.action(card, "管理会话", false, () -> backend.loadManagement(desktop, identities));
+                home.action(card, "管理归档", false, () -> backend.loadArchivedManagement(desktop, identities));
+                home.action(card, "查看普通会话", false, () -> refreshDesktop(desktop));
+                home.action(card, archiveCatalogue ? "刷新归档" : "查看归档", false, () -> loadArchived(desktop));
                 break;
             case SHARES_READY:
                 if (offers.isEmpty()) home.body(card, "没有可查看的会话。请检查电脑上的共享设置。", 15);
@@ -481,6 +569,29 @@ public final class MainActivity extends Activity {
         return matched;
     }
 
+    private void confirmManagedClose(DesktopBackend.Desktop desktop, NativeDesktopBackend.ManagementItem row) {
+        new android.app.AlertDialog.Builder(this).setTitle("关闭会话？")
+            .setMessage(row.title + "正在运行。关闭会结束这个会话，历史会保留。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("关闭会话", (dialog, which) -> backend.closeManagementRun(desktop, row))
+            .show();
+    }
+
+    private void editManagedTitle(DesktopBackend.Desktop desktop, NativeDesktopBackend.ManagementItem row) {
+        android.widget.EditText title = new android.widget.EditText(this);
+        title.setSingleLine(true);
+        title.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(256)});
+        title.setText(row.title);
+        title.selectAll();
+        new android.app.AlertDialog.Builder(this).setTitle("改名").setView(title)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存", (dialog, which) -> {
+                String value = title.getText().toString().trim();
+                if (!value.isEmpty() && value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 256)
+                    backend.renameManagement(desktop, row, value);
+            }).show();
+    }
+
     private void openControl(DesktopBackend.Desktop desktop, String source) {
         long exact = backend.controlHandle(desktop);
         if (exact == 0) return;
@@ -499,6 +610,18 @@ public final class MainActivity extends Activity {
         setContentView(controlPanel);
         controlPanel.requestApplyInsets();
         updateConnectionViews();
+    }
+
+    private void updateManagementProjection(DesktopBackend.Desktop desktop) {
+        if (!projectionForeground) return;
+        TextView viewport = managementViewports.get(desktop.localId);
+        if (viewport == null) return;
+        if (!viewport.isAttachedToWindow()) {
+            managementViewports.remove(desktop.localId);
+            return;
+        }
+        String frame = backend.managementProjection(desktop);
+        viewport.setText(frame == null ? "" : frame);
     }
 
     private void updateConnectionViews() {
@@ -559,8 +682,16 @@ public final class MainActivity extends Activity {
         render();
     }
 
+    @Override protected void onStart() {
+        super.onStart();
+        projectionForeground = true;
+    }
+
     @Override protected void onStop() {
+        projectionForeground = false;
         if (controlPanel != null) leaveControl(true);
+        for (TextView viewport : managementViewports.values()) viewport.setText("");
+        if (backend != null) backend.stopManagementViews();
         super.onStop();
     }
 
@@ -755,7 +886,11 @@ public final class MainActivity extends Activity {
         switch (state) {
             case WAITING_FOR_DESKTOP: return "请在电脑上点同意";
             case LOADING_SHARES: return "正在读取共享会话";
+            case MANAGEMENT_READY: return "会话管理已连接";
+            case MANAGEMENT_VIEWING: return "原会话已接入";
+            case MANAGEMENT_WAITING: return "正在提交管理操作";
             case SHARES_READY: return "共享会话";
+            case CATALOGUE_READY: return "会话列表（只读）";
             case AWAITING_OBSERVER: return "正在连接会话，请按手机提示确认";
             case OBSERVING: return "会话快照";
             case CONTROLLING: return "已获控制批准";

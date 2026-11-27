@@ -1275,6 +1275,7 @@ fn history_snapshot_bytes(items: &[ResourceItem], capacity: usize) -> usize {
                 cwd,
                 updated_at,
                 created_at,
+                opencode_archive,
                 ..
             } = item
             else {
@@ -1288,6 +1289,9 @@ fn history_snapshot_bytes(items: &[ResourceItem], capacity: usize) -> usize {
                 cwd.as_ref().map_or(0, String::capacity),
                 updated_at.as_ref().map_or(0, String::capacity),
                 created_at.as_ref().map_or(0, String::capacity),
+                opencode_archive
+                    .as_ref()
+                    .map_or(0, |(_, key)| key.capacity()),
             ]
             .into_iter()
             .fold(size, usize::saturating_add)

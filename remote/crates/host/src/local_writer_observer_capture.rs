@@ -130,6 +130,140 @@ impl NativeRunProducer {
     }
 }
 
+/// An independent native-management borrow of the exact original producer.
+type ManagementFence = Arc<dyn Fn() -> bool + Send + Sync>;
+
+#[derive(Clone)]
+struct ManagementProjectionFence {
+    check: ManagementFence,
+    scope: SessionScope,
+    complete: Arc<AtomicBool>,
+    sealed: Arc<AtomicBool>,
+}
+
+impl ManagementProjectionFence {
+    fn live(&self) -> bool {
+        self.complete.load(Ordering::Acquire)
+            && !self.sealed.load(Ordering::Acquire)
+            && (self.check)()
+    }
+}
+
+pub struct PendingManagementProjection {
+    fence: ManagementProjectionFence,
+    pending: PendingProjection,
+    _queued: Arc<()>,
+}
+
+pub struct ManagementProjection {
+    fence: ManagementProjectionFence,
+    captured: projection::CapturedProjection,
+}
+
+impl NativeRunProducer {
+    /// Trusted local caller supplies the already resolved scope and a live
+    /// authorization fence. This acquires no input or peer ownership.
+    pub fn request_management_projection(
+        &self,
+        expected: &SessionScope,
+        check: ManagementFence,
+    ) -> Result<PendingManagementProjection, Reject> {
+        let scope = self.native_scope();
+        if &scope != expected {
+            return Err(Reject::Target);
+        }
+        let fence = ManagementProjectionFence {
+            check,
+            scope,
+            complete: self.complete.clone(),
+            sealed: self.writer.handle.sealed.clone(),
+        };
+        if !fence.live() {
+            return Err(Reject::Policy);
+        }
+        let queued = Arc::new(());
+        let weak = Arc::downgrade(&queued);
+        let in_queue = fence.clone();
+        let pending = self
+            .writer
+            .projection
+            .as_ref()
+            .ok_or(Reject::Unsupported)?
+            .capture_observer(Box::new(move || {
+                weak.upgrade().is_some() && in_queue.live()
+            }))?;
+        Ok(PendingManagementProjection {
+            fence,
+            pending,
+            _queued: queued,
+        })
+    }
+}
+
+impl PendingManagementProjection {
+    pub fn wait(self, budget: Duration) -> Result<ManagementProjection, Reject> {
+        if budget.is_zero() || budget > MAX_OBSERVER_CAPTURE_WAIT || !self.fence.live() {
+            return Err(Reject::Policy);
+        }
+        let captured = self
+            .pending
+            .wait(budget)
+            .map_err(|failure| match failure {
+                WaitError::Uncertain => Reject::Pending,
+                WaitError::Closed => Reject::Closed,
+            })??;
+        if captured.target().run != self.fence.scope.run
+            || captured.target().generation.to_string() != self.fence.scope.generation
+        {
+            return Err(Reject::Target);
+        }
+        if !self.fence.live() {
+            return Err(Reject::Policy);
+        }
+        Ok(ManagementProjection {
+            fence: self.fence,
+            captured,
+        })
+    }
+}
+
+impl ManagementProjection {
+    /// A bounded plain-text rendering of the visible grid, never raw PTY
+    /// bytes or scrollback. The transport must recheck before emission.
+    pub fn text(&self) -> Result<String, Reject> {
+        use cc_desk_remote_terminal::CellRole;
+        if !self.fence.live() {
+            return Err(Reject::Policy);
+        }
+        let view = self.captured.view();
+        let mut text = String::new();
+        for (index, row) in view.cells().chunks_exact(view.columns().into()).enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            let start = text.len();
+            for cell in row {
+                if matches!(
+                    cell.role,
+                    CellRole::WideSpacer | CellRole::LeadingWideSpacer
+                ) {
+                    continue;
+                }
+                let scalar = cell.scalar;
+                text.push(if cell.style.hidden || scalar.is_control()
+                    || matches!(scalar as u32, 0x061c | 0x200e..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+                { ' ' } else { scalar });
+            }
+            let end = start + text[start..].trim_end_matches(' ').len();
+            text.truncate(end);
+        }
+        if !self.fence.live() {
+            return Err(Reject::Policy);
+        }
+        Ok(text)
+    }
+}
+
 struct CloseObserver(Option<BoundDataAuthority>);
 
 impl Drop for CloseObserver {

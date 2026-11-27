@@ -112,7 +112,7 @@ describe('CC Desk product boundary', () => {
     expect(app).not.toContain('LegacyCompatibilityApp')
     expect(app).not.toContain('VITE_CC_DESK_COMPATIBILITY')
     expect(read('src/stores/shell.ts')).not.toContain('isCompatibilityEnabled')
-    expect(nav.match(/section: '[^']+'/g)).toEqual(["section: 'workspace'", "section: 'projects'", "section: 'remote'", "section: 'settings'"])
+    expect(nav.match(/section: '[^']+'/g)).toEqual(["section: 'workspace'", "section: 'projects'", "section: 'settings'"])
     expect(read('src/components/TerminalView.vue')).not.toMatch(/IconBar|SidebarPanel|TerminalHeader|startProjectSession|pendingResume|terminal:newSession/)
     expect(read('src/components/sidebar/SidebarPanel.vue')).not.toContain('Type-only compatibility')
     expect(read('src/composables/useAppShortcuts.ts')).not.toContain('useLegacyAppShortcuts')

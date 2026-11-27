@@ -168,3 +168,9 @@ The desktop Release caller omitted named forwarding, so the Android signer recei
 
 - RC4 的 Windows build proof 哈希匹配 CRLF checkout；Linux 发布检查读取同一提交的 LF blob，拒绝发布。精确运行：<https://github.com/shawnwu2022/cc-desk/actions/runs/45759279625/job/139726348749>。
 - 固定 Android 原生 Cargo.lock 的 Git checkout 字节，不在校验时归一化、不接受两套摘要。跨平台回归实际调用 Git，分别核对 autocrlf=true/false 得到的字节与原始 blob。
+
+## Unpushed release work must survive temporary-directory cleanup
+
+- A Git commit in a checkout under the system temporary directory is not a durable checkpoint. The checkout can disappear together with its Git objects and build cache during routine disk cleanup.
+- Keep release-development checkouts in a persistent project directory. Before a long interruption, verify a source-only recovery reference outside the temporary directory and check that it resolves to the same commit. Retain one current checkpoint, not a pile of builds or archives.
+- Test caches and disposable fixtures can still use temporary storage. A public or older local branch is a rebuild baseline, not evidence that unpushed work survived.

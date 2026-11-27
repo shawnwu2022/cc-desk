@@ -186,6 +186,8 @@ pub(crate) enum ResourceItem {
         truncated: bool,
         /// 代表 rollout 位于 CLI 自身的归档容器（如 Codex archived_sessions/）。
         archived: bool,
+        #[serde(skip)]
+        opencode_archive: Option<(bool, String)>,
         cwd: Option<String>,
         updated_at: Option<String>,
         /// 会话创建时间（稳定排序键）；缺失时前端回落首见近似。

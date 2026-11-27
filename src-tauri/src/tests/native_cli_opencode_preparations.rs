@@ -36,6 +36,8 @@ fn Opencode_PreparationWaitersDoNotBlockOtherRequests_096() {
         owner: caller.clone(),
         request: request.clone(),
         result: Mutex::new(None),
+        #[cfg(all(windows, feature = "remote-observer"))]
+        catalogue_source: Mutex::new(None),
         settled: Condvar::new(),
     });
     service.opencode_preparations.lock().push(pending.clone());
@@ -96,6 +98,8 @@ fn Opencode_PreparationRevocationKeepsInFlightReceipt_097() {
         owner: caller.clone(),
         request: request.clone(),
         result: Mutex::new(None),
+        #[cfg(all(windows, feature = "remote-observer"))]
+        catalogue_source: Mutex::new(None),
         settled: Condvar::new(),
     });
     service.opencode_preparations.lock().push(pending.clone());
@@ -144,6 +148,8 @@ fn Opencode_PreparationCapacityNeverReplaysUnknown_098() {
                 owner: caller.clone(),
                 request: old,
                 result: Mutex::new(Some(Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN")))),
+                #[cfg(all(windows, feature = "remote-observer"))]
+                catalogue_source: Mutex::new(None),
                 settled: Condvar::new(),
             }));
     }

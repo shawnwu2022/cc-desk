@@ -56,6 +56,16 @@ pub mod browser_registration;
 mod browser_registration_tests;
 #[cfg(feature = "experimental")]
 pub mod registration_channel;
+#[cfg(feature = "experimental")]
+pub mod session_catalogue;
+#[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
+pub mod catalogue_read_channel;
+#[cfg(feature = "experimental")]
+pub mod catalogue_rendezvous;
+#[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
+pub mod session_management;
+#[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
+pub mod session_management_channel;
 #[cfg(all(test, feature = "experimental"))]
 #[path = "../tests/support/identities.rs"]
 #[allow(dead_code)]

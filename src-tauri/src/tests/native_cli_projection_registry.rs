@@ -1430,6 +1430,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
         created_at: None,
         truncated: true,
         archived: false,
+        opencode_archive: None,
     }];
     assert!(history_snapshot_bytes(&items, items.capacity()) > HISTORY_SNAPSHOT_BYTES);
     let t = tempfile::tempdir().unwrap();
@@ -1469,6 +1470,7 @@ fn HistorySnapshot_CreationTimeCapacityIsBounded_001() {
         created_at: Some(created),
         truncated: false,
         archived: false,
+        opencode_archive: None,
     }];
     assert!(history_snapshot_bytes(&items, items.capacity()) > HISTORY_SNAPSHOT_BYTES);
 }

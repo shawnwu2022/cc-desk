@@ -1652,6 +1652,52 @@ async fn observer_native_capture_is_bound_to_the_original_producer_scope() {
 }
 
 #[test]
+fn management_projection_borrows_live_original_and_honors_revocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("management.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_MANAGEMENT".into(),
+        3,
+        3,
+        20,
+    )
+    .unwrap();
+    producer.output(0, b"ORIGINAL".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let mut wrong = scope.clone();
+    wrong.generation = "99".into();
+    assert!(
+        producer
+            .request_management_projection(&wrong, Arc::new(|| true))
+            .is_err()
+    );
+    let live = Arc::new(AtomicBool::new(true));
+    let flag = live.clone();
+    let check = Arc::new(move || flag.load(Ordering::Acquire));
+    let frame = producer
+        .request_management_projection(&scope, check.clone())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    assert!(frame.text().unwrap().starts_with("ORIGINAL"));
+    let pending = producer
+        .request_management_projection(&scope, check.clone())
+        .unwrap();
+    live.store(false, Ordering::Release);
+    assert!(pending.wait(BUDGET).is_err());
+    assert!(frame.text().is_err());
+    assert!(
+        producer
+            .request_management_projection(&scope, check)
+            .is_err()
+    );
+    drop(frame);
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+}
+
+#[test]
 fn observer_queue_denial_and_credits_do_not_degrade_native_producer() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let dir = tempfile::tempdir().unwrap();
