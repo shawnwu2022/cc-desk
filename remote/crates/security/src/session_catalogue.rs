@@ -50,6 +50,40 @@ pub enum CatalogueError {
     ReadBudget,
 }
 
+/// A bounded snapshot built only from sources already retained by the desktop.
+/// Keep physical identity until all admitted batches have been considered.
+#[derive(Default)]
+pub struct OrdinaryPortfolio {
+    admitted: BTreeSet<OpaqueKey>,
+    rows: Vec<SourceRow>,
+    received: usize,
+    overflowed: bool,
+}
+
+impl OrdinaryPortfolio {
+    pub fn push(&mut self, source: OpaqueKey, rows: Vec<SourceRow>) -> Result<(), CatalogueError> {
+        self.received = self.received.saturating_add(rows.len());
+        if self.received > MAX_CATALOGUE_CANDIDATES {
+            self.overflowed = true;
+            return Err(CatalogueError::ReadBudget);
+        }
+        let previous_len = self.rows.len();
+        self.rows
+            .extend(rows.into_iter().filter(|row| row.source == source));
+        if self.rows.len() != previous_len {
+            self.admitted.insert(source);
+        }
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<Vec<DisplayRow>, CatalogueError> {
+        if self.overflowed {
+            return Err(CatalogueError::ReadBudget);
+        }
+        list(ListMode::Sessions, &self.admitted, &self.rows)
+    }
+}
+
 /// A caller supplies fresh rows and source keys already admitted for the
 /// exact paired device. This function cannot establish pairing or sign data.
 /// Its output is a display projection, not a reusable control target.
@@ -169,6 +203,80 @@ mod tests {
             list(ListMode::Archived, &allowed, &rows).unwrap()[0].title,
             "visible archive"
         );
+    }
+
+    #[test]
+    fn ordinary_portfolio_applies_archive_evidence_after_combining_scopes() {
+        use ArchiveEvidence::*;
+        use DisplayLifecycle::*;
+        let mut portfolio = OrdinaryPortfolio::default();
+        portfolio
+            .push(
+                [1; 32],
+                vec![
+                    item(1, 1, NotArchived, Open, "open"),
+                    item(1, 3, NotArchived, Closed, "unresolved alias"),
+                ],
+            )
+            .unwrap();
+        portfolio
+            .push(
+                [2; 32],
+                vec![
+                    item(2, 2, NotArchived, Closed, "closed"),
+                    item(2, 3, Unknown, History, "ambiguous"),
+                    item(2, 4, Archived, Closed, "archived"),
+                    item(9, 5, NotArchived, Open, "outside scope"),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            portfolio.finish().unwrap(),
+            [
+                DisplayRow {
+                    lifecycle: Open,
+                    title: "open".into()
+                },
+                DisplayRow {
+                    lifecycle: Closed,
+                    title: "closed".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_portfolio_bounds_total_candidates_across_scopes() {
+        let mut portfolio = OrdinaryPortfolio::default();
+        portfolio
+            .push(
+                [1; 32],
+                vec![
+                    item(
+                        1,
+                        1,
+                        ArchiveEvidence::NotArchived,
+                        DisplayLifecycle::Closed,
+                        "row"
+                    );
+                    MAX_CATALOGUE_CANDIDATES
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            portfolio.push(
+                [2; 32],
+                vec![item(
+                    2,
+                    2,
+                    ArchiveEvidence::NotArchived,
+                    DisplayLifecycle::Open,
+                    "last"
+                )]
+            ),
+            Err(CatalogueError::ReadBudget)
+        );
+        assert_eq!(portfolio.finish(), Err(CatalogueError::ReadBudget));
     }
 
     #[test]

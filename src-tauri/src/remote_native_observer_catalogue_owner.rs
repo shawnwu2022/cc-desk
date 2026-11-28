@@ -38,12 +38,14 @@ pub(super) struct CatalogueOwner {
 
 enum RouteSource {
     Read(Arc<RetainedHistory>),
+    ReadAll(Arc<ManagementPortfolio>),
     Manage(Arc<ManagementPortfolio>),
 }
 
 #[derive(Clone, Copy)]
 enum RoutePurpose {
     Read(ListMode),
+    ReadAll,
     // This selector comes from the desktop's protected management reference
     // table, never from a renderer or phone-provided native selector.
     Manage,
@@ -103,7 +105,7 @@ impl Owner {
             {
                 project_ids.len()
             }
-            (None, RoutePurpose::Manage) => 0,
+            (None, RoutePurpose::ReadAll | RoutePurpose::Manage) => 0,
             _ => return Err(locked()),
         };
 
@@ -146,14 +148,26 @@ impl Owner {
                     ListMode::Sessions => "unarchived sessions",
                     ListMode::Archived => "archived sessions",
                 };
-                ("Allow read-only session listing", format!(
-                    "Allow this phone to list {list_name} in {} selected projects?\n\nDevice: {suffix}\n\nThis does not allow terminal input or session changes.",
-                    project_count,
-                ))
+                (
+                    "Allow read-only session listing",
+                    format!(
+                        "Allow this phone to list {list_name} in {} selected projects?\n\nDevice: {suffix}\n\nThis does not allow terminal input or session changes.",
+                        project_count,
+                    ),
+                )
             }
-            RoutePurpose::Manage => ("Allow session management", format!(
-                "Allow this paired phone to manage eligible Desk sessions from your visible local projects across Codex, Claude Code, and OpenCode for up to five minutes?\n\nDevice: {suffix}\n\nWithin that window the phone can make multiple requests and see the live view of an eligible running session. You can stop it any time. Terminal input is not allowed."
-            )),
+            RoutePurpose::ReadAll => (
+                "Allow read-only session listing",
+                format!(
+                    "Allow this phone to list unarchived sessions from visible local projects across supported CLIs?\n\nDevice: {suffix}\n\nThis does not allow terminal input, archived sessions, or session changes."
+                ),
+            ),
+            RoutePurpose::Manage => (
+                "Allow session management",
+                format!(
+                    "Allow this paired phone to manage eligible Desk sessions from your visible local projects across Codex, Claude Code, and OpenCode for up to five minutes?\n\nDevice: {suffix}\n\nWithin that window the phone can make multiple requests and see the live view of an eligible running session. You can stop it any time. Terminal input is not allowed."
+                ),
+            ),
         };
         let approval = ApprovalMachine::show(
             app,
@@ -178,19 +192,27 @@ impl Owner {
                 let desktop_window = window.clone();
                 let granted = tokio::task::spawn_blocking(move || {
                     owner.check_catalogue_device(&device, end)?;
-                    let retained = match scope {
-                        Some(scope) => RouteSource::Read(Arc::new(
+                    let retained = match (scope, purpose) {
+                        (Some(scope), RoutePurpose::Read(_)) => RouteSource::Read(Arc::new(
                             owner
                                 .runtime
                                 .retain_owner_catalogue(&owner.caller, &scope)?,
                         )),
-                        None => RouteSource::Manage(Arc::new(
+                        (None, RoutePurpose::ReadAll) => RouteSource::ReadAll(Arc::new(
                             owner
                                 .runtime
                                 .retain_owner_management_portfolio(&owner.caller, || {
                                     owner.check_catalogue_device(&device, end)
                                 })?,
                         )),
+                        (None, RoutePurpose::Manage) => RouteSource::Manage(Arc::new(
+                            owner
+                                .runtime
+                                .retain_owner_management_portfolio(&owner.caller, || {
+                                    owner.check_catalogue_device(&device, end)
+                                })?,
+                        )),
+                        _ => return Err(locked()),
                     };
                     owner.check_catalogue_device(&device, end)?;
                     Ok::<_, SafeError>(Arc::new(CatalogueOwner {
@@ -247,6 +269,16 @@ impl Owner {
         window: &Window,
     ) -> Result<Snapshot, SafeError> {
         self.start_paired_route(target, Some(scope), RoutePurpose::Read(mode), app, window)
+            .await
+    }
+
+    pub(crate) async fn start_ordinary_catalogue_read(
+        self: &Arc<Self>,
+        target: DeviceTarget,
+        app: &AppHandle,
+        window: &Window,
+    ) -> Result<Snapshot, SafeError> {
+        self.start_paired_route(target, None, RoutePurpose::ReadAll, app, window)
             .await
     }
 
@@ -664,6 +696,10 @@ impl CatalogueOwner {
             RoutePurpose::Read(mode) => {
                 offer.envelope(self.sign_packet(offer.signing_message_for(mode)).await?)
             }
+            RoutePurpose::ReadAll => offer.envelope(
+                self.sign_packet(offer.signing_message_for(ListMode::Sessions))
+                    .await?,
+            ),
             RoutePurpose::Manage => {
                 let management = self.management_offer(&offer);
                 management.envelope(
@@ -816,7 +852,7 @@ impl CatalogueOwner {
     // Never authorize a new pairing merely because the display ID stayed the same.
     fn check_current(&self) -> Result<(), SafeError> {
         self.owner.check_catalogue_device(&self.device, self.end)?;
-        if let RouteSource::Manage(portfolio) = &self.retained {
+        if let RouteSource::ReadAll(portfolio) | RouteSource::Manage(portfolio) = &self.retained {
             self.owner
                 .runtime
                 .check_owner_management_portfolio(&self.owner.caller, portfolio)?;
@@ -864,7 +900,12 @@ impl CatalogueOwner {
     }
 
     async fn list(self: Arc<Self>, mode: ListMode) -> Result<Vec<DisplayRow>, ReadError> {
-        if !matches!(self.purpose, RoutePurpose::Read(allowed) if allowed == mode) {
+        if !matches!(self.purpose, RoutePurpose::Read(allowed) if allowed == mode)
+            && !matches!(
+                (self.purpose, mode),
+                (RoutePurpose::ReadAll, ListMode::Sessions)
+            )
+        {
             return Err(ReadError::Denied);
         }
         tokio::task::spawn_blocking(move || {
@@ -875,15 +916,22 @@ impl CatalogueOwner {
                 .map_err(|_| ReadError::Denied)?
                 + 1;
             let epoch = WireU64::parse(&epoch.to_string()).map_err(|_| ReadError::Denied)?;
-            let RouteSource::Read(retained) = &self.retained else {
-                return Err(ReadError::Denied);
-            };
-            self.owner
-                .runtime
-                .read_owner_catalogue(&self.owner.caller, retained, epoch, mode, || {
-                    self.check_current()
-                })
-                .map_err(|_| ReadError::Denied)
+            let runtime = &self.owner.runtime;
+            let caller = &self.owner.caller;
+            match &self.retained {
+                RouteSource::Read(retained) => {
+                    runtime.read_owner_catalogue(caller, retained, epoch, mode, || {
+                        self.check_current()
+                    })
+                }
+                RouteSource::ReadAll(portfolio) => {
+                    runtime.read_owner_ordinary_catalogue(caller, portfolio, epoch, || {
+                        self.check_current()
+                    })
+                }
+                RouteSource::Manage(_) => return Err(ReadError::Denied),
+            }
+            .map_err(|_| ReadError::Denied)
         })
         .await
         .map_err(|_| ReadError::Denied)?
