@@ -52,3 +52,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Session search coverage JVM test failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Session display title JVM test compile failed' }
 & "$Jdk/bin/java.exe" -cp "$out/unit" cn.ccdesk.android.SessionDisplayTitleTest
 if ($LASTEXITCODE -ne 0) { throw 'Session display title JVM test failed' }
+
+& "$Jdk/bin/javac.exe" -encoding UTF-8 -classpath "$out/platform" -d "$out/unit" "$root/tests/cn/ccdesk/android/ScanPreviewGeometryTest.java"
+if ($LASTEXITCODE -ne 0) { throw 'Scan preview geometry test compilation failed' }
+& "$Jdk/bin/java.exe" -cp "$out/unit;$out/platform" cn.ccdesk.android.ScanPreviewGeometryTest
+if ($LASTEXITCODE -ne 0) { throw 'Scan preview geometry test failed' }
