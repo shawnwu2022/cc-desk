@@ -63,7 +63,7 @@ it('PairingInvite_StopsAfterExpiryAndIgnoresLateRead_002', async () => {
 })
 
 
-it('PairingCatalogue_RequiresOneRegisteredProjectAndRefreshesAfterTheOfferCloses', async () => {
+it.each([false, true])('PairingCatalogue_RequiresOneRegisteredProjectAndRefreshesAfterTheOfferCloses_%s', async ordinary => {
   const device = { phoneId: 'fixture-phone', phoneRelayPublicKeySec1: 'relay-key',
     phoneEndpointSpki: 'endpoint-key', endpointBinding: 'binding', tunnel: 'fixture-tunnel',
     sharing: 'none' as const, revocationPending: false }
@@ -73,6 +73,7 @@ it('PairingCatalogue_RequiresOneRegisteredProjectAndRefreshesAfterTheOfferCloses
   const shareCatalogue = vi.fn<NonNullable<VerifiedPairing['shareCatalogue']>>().mockResolvedValue(offered)
   const share = vi.fn<NonNullable<VerifiedPairing['share']>>()
   const handle: VerifiedPairing = { endpoint: 'wss://relay.test/relay', current, shareCatalogue, share,
+    ...(ordinary ? { startOrdinaryCatalogueRead: vi.fn() } : {}),
     approve: vi.fn(), create: vi.fn(), cancel: vi.fn(), reject: vi.fn(), revoke: vi.fn() }
   view = mount(RemoteConnectionsView, { global: {
     plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
@@ -82,6 +83,10 @@ it('PairingCatalogue_RequiresOneRegisteredProjectAndRefreshesAfterTheOfferCloses
   await view.findAll('button').find(b => b.text() === en.remotePairingVerify)!.trigger('click')
   await flushPromises()
   const button = () => view!.findAll('button').find(b => b.text() === en.remoteCatalogueStart)!
+  if (ordinary) {
+    expect(button()).toBeUndefined()
+    await view.get('[data-toggle-advanced-sharing]').trigger('click')
+  }
   expect(button().attributes('disabled')).toBeDefined()
   const options = view.findAll('select').find(control => control.find('option[value="project-a"]').exists())!
   expect(options.text()).toContain('Allowed workspace')

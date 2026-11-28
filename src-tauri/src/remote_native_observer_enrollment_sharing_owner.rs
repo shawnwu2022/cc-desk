@@ -296,11 +296,19 @@ impl Owner {
     }
     pub(crate) async fn stop_sharing(&self) -> Result<Snapshot, SafeError> {
         self.check_document()?;
-        let _mutation = self
+        let mut cache = self
             .state
             .try_lock()
             .map_err(|_| error("REMOTE_PAIRING_BUSY"))?;
         self.stop_share(None).await?;
+        // Stopping an existing share does not cancel a separate invitation.
+        // Refresh it only after the local share has retired. In an expired or
+        // unavailable setup, do not present an unverifiable pending request.
+        if cache.invite.is_some() && Instant::now() < self.deadline {
+            if let Ok(snapshot) = self.snapshot(&mut cache).await {
+                return Ok(snapshot);
+            }
+        }
         self.local_status().await
     }
     pub(super) async fn stop_share(&self, tunnel: Option<[u8; 16]>) -> Result<(), SafeError> {
