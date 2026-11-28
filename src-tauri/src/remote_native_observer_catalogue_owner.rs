@@ -31,7 +31,8 @@ pub(super) struct CatalogueOwner {
     purpose: RoutePurpose,
     grant_id: uuid::Uuid,
     retained: RouteSource,
-    end: Instant,
+    window: CatalogueWindow,
+    lifetime: Arc<NativeRevocation>,
     epoch: AtomicU64,
     reading: tokio::sync::Mutex<()>,
 }
@@ -53,6 +54,31 @@ enum RoutePurpose {
 
 const MANAGEMENT_WINDOW: Duration = Duration::from_secs(300);
 const MIN_OFFER_BUDGET: Duration = Duration::from_secs(10);
+const OFFER_TTL: Duration = Duration::from_secs(60);
+const CONTROL_BUDGET: Duration = Duration::from_secs(8);
+
+#[derive(Clone, Copy)]
+enum CatalogueWindow {
+    // Explicit new consent only; never constructed from a stored pairing alone.
+    WhileDesktopOpen,
+    Until(Instant),
+}
+impl CatalogueWindow {
+    fn cap(self, now: Instant, budget: Duration) -> Instant {
+        let local = now + budget;
+        match self {
+            Self::WhileDesktopOpen => local,
+            Self::Until(end) => end.min(local),
+        }
+    }
+
+    fn is_open(self, now: Instant) -> bool {
+        match self {
+            Self::WhileDesktopOpen => true,
+            Self::Until(end) => now < end,
+        }
+    }
+}
 
 fn catalogue_can_rotate(now: Instant, end: Instant, stopped: bool, previous_retired: bool) -> bool {
     !stopped && previous_retired && end.saturating_duration_since(now) >= MIN_OFFER_BUDGET
@@ -72,6 +98,7 @@ fn next_management_epochs(epoch: &AtomicU64) -> Option<[WireU64; 3]> {
 struct ReadySelection {
     wire: String,
     management: Option<VerifiedManagementRoute>,
+    expires_unix_ms: u64,
 }
 
 fn target_matches(device: &DeviceSummary, target: &DeviceTarget) -> bool {
@@ -154,7 +181,7 @@ impl Owner {
             RoutePurpose::ReadAll => (
                 "Allow read-only session listing",
                 format!(
-                    "Allow this phone to list unarchived sessions from visible local projects across supported CLIs?\n\nDevice: {suffix}\n\nSharing stops when this desktop pairing window ends or you stop sharing. This does not allow terminal input, archived sessions, or session changes."
+                    "Allow this phone to list unarchived sessions from visible local projects across supported CLIs?\n\nDevice: {suffix}\n\nSharing stops when CC Desk closes or you stop sharing. This does not allow terminal input, archived sessions, or session changes."
                 ),
             ),
             RoutePurpose::Manage => (
@@ -178,15 +205,18 @@ impl Owner {
                 let Some(approval_end) = permit.consume(|(), end| end) else {
                     return Ok(None);
                 };
-                let end = match purpose {
-                    RoutePurpose::ReadAll => self.deadline,
-                    RoutePurpose::Manage => self.deadline.min(Instant::now() + MANAGEMENT_WINDOW),
-                    RoutePurpose::Read(_) => approval_end,
+                use CatalogueWindow::{Until, WhileDesktopOpen};
+                let route_window = match purpose {
+                    RoutePurpose::ReadAll => WhileDesktopOpen,
+                    RoutePurpose::Manage => {
+                        Until(self.deadline.min(Instant::now() + MANAGEMENT_WINDOW))
+                    }
+                    RoutePurpose::Read(_) => Until(approval_end),
                 };
                 let owner = self.clone();
                 let desktop_window = window.clone();
                 let granted = tokio::task::spawn_blocking(move || {
-                    owner.check_catalogue_device(&device, end)?;
+                    owner.check_catalogue_device(&device, route_window)?;
                     let retained = match (scope, purpose) {
                         (Some(scope), RoutePurpose::Read(_)) => RouteSource::Read(Arc::new(
                             owner
@@ -197,19 +227,19 @@ impl Owner {
                             owner
                                 .runtime
                                 .retain_owner_management_portfolio(&owner.caller, || {
-                                    owner.check_catalogue_device(&device, end)
+                                    owner.check_catalogue_device(&device, route_window)
                                 })?,
                         )),
                         (None, RoutePurpose::Manage) => RouteSource::Manage(Arc::new(
                             owner
                                 .runtime
                                 .retain_owner_management_portfolio(&owner.caller, || {
-                                    owner.check_catalogue_device(&device, end)
+                                    owner.check_catalogue_device(&device, route_window)
                                 })?,
                         )),
                         _ => return Err(locked()),
                     };
-                    owner.check_catalogue_device(&device, end)?;
+                    owner.check_catalogue_device(&device, route_window)?;
                     Ok::<_, SafeError>(Arc::new(CatalogueOwner {
                         owner,
                         desktop_window,
@@ -218,7 +248,8 @@ impl Owner {
                         purpose,
                         grant_id: uuid::Uuid::new_v4(),
                         retained,
-                        end,
+                        window: route_window,
+                        lifetime: NativeRevocation::new(),
                         epoch: AtomicU64::new(0),
                         reading: tokio::sync::Mutex::new(()),
                     }))
@@ -235,10 +266,14 @@ impl Owner {
     fn check_catalogue_device(
         &self,
         expected: &DeviceSummary,
-        end: Instant,
+        window: CatalogueWindow,
     ) -> Result<(), SafeError> {
-        self.check()?;
-        if Instant::now() >= end
+        let check = || match window {
+            CatalogueWindow::WhileDesktopOpen => self.check_document(),
+            CatalogueWindow::Until(_) => self.check(),
+        };
+        check()?;
+        if !window.is_open(Instant::now())
             || !self
                 .store
                 .list_locked()
@@ -248,7 +283,7 @@ impl Owner {
         {
             return Err(locked());
         }
-        self.check()
+        check()
     }
 }
 
@@ -371,7 +406,9 @@ impl Owner {
                 state: DeviceState::Confirmed,
                 ..row
             };
-            let check = || current.check_catalogue_device(&device, current.deadline);
+            let check = || {
+                current.check_catalogue_device(&device, CatalogueWindow::Until(current.deadline))
+            };
             check()?;
             let portfolio = current
                 .runtime
@@ -399,7 +436,8 @@ impl Owner {
             purpose: RoutePurpose::ReadAll,
             grant_id: uuid::Uuid::new_v4(),
             retained: RouteSource::ReadAll(Arc::new(portfolio)),
-            end: self.deadline,
+            window: CatalogueWindow::WhileDesktopOpen,
+            lifetime: NativeRevocation::new(),
             epoch: AtomicU64::new(0),
             reading: tokio::sync::Mutex::new(()),
         }))
@@ -407,9 +445,13 @@ impl Owner {
     }
 
     async fn install_catalogue_task(&self, owner: Arc<CatalogueOwner>) -> Result<(), SafeError> {
+        self.check()?;
         self.stop_share(None).await?;
+        self.check()?;
         let offer = owner.sign_offer().await?;
+        self.check()?;
         let tunnel = owner.device.tunnel;
+        let catalogue_lifetime = owner.lifetime.clone();
         let (stop, cancel) = tokio::sync::watch::channel(false);
         let phase = Arc::new(AtomicU8::new(1));
         let retired = Arc::new(AtomicBool::new(false));
@@ -427,7 +469,12 @@ impl Owner {
             result
         });
         *self.sharing.lock().await = Some(super::shares_owner::Task::new(
-            tunnel, phase, stop, task, retired,
+            tunnel,
+            phase,
+            stop,
+            task,
+            retired,
+            catalogue_lifetime,
         ));
         Ok(())
     }
@@ -478,7 +525,12 @@ impl CatalogueOwner {
             if !closed {
                 return Err(uncertain());
             }
-            if !catalogue_can_rotate(Instant::now(), self.end, stopped(&stop), closed) {
+            if !catalogue_can_rotate(
+                Instant::now(),
+                self.window.cap(Instant::now(), OFFER_TTL),
+                stopped(&stop),
+                closed,
+            ) {
                 retired.store(true, Ordering::Release);
                 return if stopped(&stop) { Ok(()) } else { result };
             }
@@ -491,7 +543,12 @@ impl CatalogueOwner {
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {},
                 };
             }
-            if !catalogue_can_rotate(Instant::now(), self.end, stopped(&stop), closed) {
+            if !catalogue_can_rotate(
+                Instant::now(),
+                self.window.cap(Instant::now(), OFFER_TTL),
+                stopped(&stop),
+                closed,
+            ) {
                 retired.store(true, Ordering::Release);
                 return Ok(());
             }
@@ -515,6 +572,7 @@ impl CatalogueOwner {
         let endpoint_retired = AtomicBool::new(true);
         let result = async {
             let remaining = offer.offer.expires_unix_ms.saturating_sub(unix_millis()?);
+            let offer_end = Instant::now() + Duration::from_millis(remaining).min(OFFER_TTL);
             if *stop.borrow() || remaining < 10_000 {
                 return Ok(());
             }
@@ -524,12 +582,14 @@ impl CatalogueOwner {
             }
             attempted_publish = true;
             let response = self
-                .owner
-                .share_wire(ShareCommand::Publish {
-                    tunnel: self.device.tunnel,
-                    ttl_seconds: remaining.div_ceil(1000).min(60) as u16,
-                    catalog_envelope: offer.wire.clone(),
-                })
+                .catalogue_wire(
+                    ShareCommand::Publish {
+                        tunnel: self.device.tunnel,
+                        ttl_seconds: remaining.div_ceil(1000).min(60) as u16,
+                        catalog_envelope: offer.wire.clone(),
+                    },
+                    offer_end,
+                )
                 .await?;
             if !matches!(response, ShareResponse::Published {ref tunnel,ref catalog_digest,..}
                 if tunnel == &hex(&self.device.tunnel) && catalog_digest == &hex(&offer.digest))
@@ -538,17 +598,19 @@ impl CatalogueOwner {
             }
             loop {
                 if *stop.borrow()
-                    || Instant::now() >= self.end
+                    || !self.window.is_open(Instant::now())
                     || offer.offer.expires_unix_ms.saturating_sub(unix_millis()?) < 10_000
                 {
                     return Ok(());
                 }
                 self.verify_current().await?;
                 match self
-                    .owner
-                    .share_wire(ShareCommand::ReadSelection {
-                        tunnel: self.device.tunnel,
-                    })
+                    .catalogue_wire(
+                        ShareCommand::ReadSelection {
+                            tunnel: self.device.tunnel,
+                        },
+                        offer_end,
+                    )
                     .await?
                 {
                     ShareResponse::Selection {
@@ -595,6 +657,43 @@ impl CatalogueOwner {
         }
     }
 
+    async fn catalogue_wire(
+        self: &Arc<Self>,
+        command: ShareCommand,
+        offer_end: Instant,
+    ) -> Result<ShareResponse, SafeError> {
+        if !matches!(self.purpose, RoutePurpose::ReadAll) {
+            return self.owner.share_wire(command).await;
+        }
+        let expected = self.device.tunnel;
+        match &command {
+            ShareCommand::Publish { tunnel, .. } | ShareCommand::ReadSelection { tunnel }
+                if *tunnel == expected => {}
+            ShareCommand::Answer { selection, .. } if selection.tunnel == expected => {}
+            _ => return Err(locked()),
+        }
+        self.verify_current().await?;
+        let setup = self
+            .owner
+            .profile
+            .catalogue_operation(
+                &self.owner.lifetime,
+                &self.lifetime,
+                offer_end.min(Instant::now() + CONTROL_BUDGET),
+            )
+            .map_err(|_| locked())?;
+        let reply = match control::share_request(setup, self.owner.address, command).await {
+            Ok(reply) => reply,
+            Err(control::ControlFailure::RetirementUnknown) => {
+                self.lifetime.revoke();
+                return Err(uncertain());
+            }
+            Err(_) => return Err(uncertain()),
+        };
+        self.verify_current().await?;
+        Ok(reply)
+    }
+
     async fn clear_published_offer(
         &self,
         offer: &SignedCatalogueOffer,
@@ -638,17 +737,21 @@ impl CatalogueOwner {
         use cc_desk_remote_security as security;
         use cc_desk_remote_transport as transport;
 
+        let offer_remaining =
+            Duration::from_millis(ready.expires_unix_ms.saturating_sub(unix_millis()?))
+                .min(OFFER_TTL);
+        let end = self.window.cap(Instant::now(), offer_remaining);
         let settings = self
             .owner
             .profile
-            .operation(&self.owner.lifetime, self.end)
+            .catalogue_operation(&self.owner.lifetime, &self.lifetime, end)
             .map_err(|_| locked())?;
         let address = self.owner.address;
-        let end = self.end;
         let exact_owner = self.clone();
         let ReadySelection {
             wire: envelope,
             management,
+            expires_unix_ms: _,
         } = ready;
         let (cancel, token) = security::cancellation();
         let (armed, wait_armed) = tokio::sync::oneshot::channel();
@@ -717,16 +820,23 @@ impl CatalogueOwner {
                     return Ok(());
                 }
                 let answer = self
-                    .owner
-                    .share_wire(ShareCommand::Answer {
-                        selection,
-                        ready_envelope: envelope,
-                    })
+                    .catalogue_wire(
+                        ShareCommand::Answer {
+                            selection,
+                            ready_envelope: envelope,
+                        },
+                        end,
+                    )
                     .await?;
                 if !matches!(answer, ShareResponse::Answered { .. }) {
                     return Err(uncertain());
                 }
-                tokio::select! { biased; _=stop.changed()=>{}, _=&mut finished=>{} }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => {},
+                    _ = tokio::time::sleep_until(end.into()) => {},
+                    _ = &mut finished => {},
+                }
                 Ok(())
             }
             .await;
@@ -752,14 +862,17 @@ impl CatalogueOwner {
             SigningPurpose,
         };
         self.verify_current().await?;
+        let cap = self.window.cap(Instant::now(), CONTROL_BUDGET);
         let settings = self
             .owner
             .profile
-            .operation(&self.owner.lifetime, self.end)
+            .catalogue_operation(&self.owner.lifetime, &self.lifetime, cap)
             .map_err(|_| locked())?;
         let public = self.owner.profile.endpoint_spki();
-        let root = self.owner.lifetime.clone();
-        let cap = self.end;
+        let root = NativeRevocation::child([
+            self.owner.lifetime.root_witness().ok_or_else(locked)?,
+            self.lifetime.root_witness().ok_or_else(locked)?,
+        ]);
         let signature =
             control::on_worker(settings, move |exec, custody, _, ready, expected, _| {
                 let key = custody
@@ -795,11 +908,12 @@ impl CatalogueOwner {
 
     pub(super) async fn sign_offer(self: &Arc<Self>) -> Result<SignedCatalogueOffer, SafeError> {
         use sha2::{Digest, Sha256};
+        let now = Instant::now();
         let remaining = self
-            .end
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .min(60_000) as u64;
+            .window
+            .cap(now, OFFER_TTL)
+            .saturating_duration_since(now)
+            .as_millis() as u64;
         if remaining < 1000 {
             return Err(locked());
         }
@@ -887,6 +1001,7 @@ impl CatalogueOwner {
             return Ok(ReadySelection {
                 wire,
                 management: Some(proof),
+                expires_unix_ms: expiry,
             });
         }
         let ready = CatalogueReady {
@@ -906,6 +1021,7 @@ impl CatalogueOwner {
         Ok(ReadySelection {
             wire,
             management: None,
+            expires_unix_ms: ready.expires_unix_ms,
         })
     }
 
@@ -968,11 +1084,18 @@ impl CatalogueOwner {
     // Membership is an exact receipt, including the independent endpoint and grant keys.
     // Never authorize a new pairing merely because the display ID stayed the same.
     fn check_current(&self) -> Result<(), SafeError> {
-        self.owner.check_catalogue_device(&self.device, self.end)?;
+        if self.lifetime.is_revoked() {
+            return Err(locked());
+        }
+        self.owner
+            .check_catalogue_device(&self.device, self.window)?;
         if let RouteSource::ReadAll(portfolio) | RouteSource::Manage(portfolio) = &self.retained {
             self.owner
                 .runtime
                 .check_owner_management_portfolio(&self.owner.caller, portfolio)?;
+        }
+        if self.lifetime.is_revoked() {
+            return Err(locked());
         }
         Ok(())
     }
@@ -1058,6 +1181,32 @@ impl CatalogueOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_sharing_outlives_setup_but_never_its_per_offer_budget() {
+        let start = Instant::now();
+        let setup_end = start + Duration::from_secs(720);
+        let later = setup_end + Duration::from_secs(1);
+        let ordinary = CatalogueWindow::WhileDesktopOpen;
+        let scoped = CatalogueWindow::Until(setup_end);
+        assert!(ordinary.is_open(later));
+        assert!(!scoped.is_open(later));
+        assert_eq!(ordinary.cap(later, OFFER_TTL), later + OFFER_TTL);
+        assert_eq!(ordinary.cap(later, CONTROL_BUDGET), later + CONTROL_BUDGET);
+        assert_eq!(scoped.cap(later, OFFER_TTL), setup_end);
+        assert!(!catalogue_can_rotate(
+            later,
+            ordinary.cap(later, OFFER_TTL),
+            true,
+            true
+        ));
+        assert!(!catalogue_can_rotate(
+            later,
+            ordinary.cap(later, OFFER_TTL),
+            false,
+            false
+        ));
+    }
 
     #[test]
     fn catalogue_window_rejects_unsafe_rotation_and_preserves_monotonic_epochs() {

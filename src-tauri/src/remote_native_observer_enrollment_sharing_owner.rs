@@ -12,6 +12,7 @@ pub(super) struct Task {
     join: tokio::task::JoinHandle<Result<(), SafeError>>,
     result: Option<Result<(), SafeError>>,
     retired: Arc<std::sync::atomic::AtomicBool>,
+    catalogue_lifetime: Option<Arc<NativeRevocation>>,
 }
 impl Task {
     pub(super) fn new(
@@ -20,6 +21,7 @@ impl Task {
         stop: tokio::sync::watch::Sender<bool>,
         join: tokio::task::JoinHandle<Result<(), SafeError>>,
         retired: Arc<std::sync::atomic::AtomicBool>,
+        catalogue_lifetime: Arc<NativeRevocation>,
     ) -> Self {
         Self {
             tunnel,
@@ -28,14 +30,22 @@ impl Task {
             join,
             retired,
             result: None,
+            catalogue_lifetime: Some(catalogue_lifetime),
         }
     }
 
     pub(super) fn phase(&self) -> u8 {
         self.phase.load(Ordering::Acquire)
     }
-    async fn stop(&mut self) -> Result<(), SafeError> {
+    fn signal_stop(&self) {
+        if let Some(lifetime) = &self.catalogue_lifetime {
+            lifetime.revoke();
+        }
         self.stop.send_replace(true);
+    }
+
+    async fn stop(&mut self) -> Result<(), SafeError> {
+        self.signal_stop();
         if let Some(result) = &self.result {
             return if self.retired.load(Ordering::Acquire) {
                 Ok(())
@@ -58,7 +68,7 @@ impl Task {
 }
 impl Drop for Task {
     fn drop(&mut self) {
-        self.stop.send_replace(true);
+        self.signal_stop();
     }
 }
 
@@ -153,6 +163,7 @@ impl Owner {
             join,
             result: None,
             retired,
+            catalogue_lifetime: None,
         });
         self.snapshot(&mut cache).await
     }

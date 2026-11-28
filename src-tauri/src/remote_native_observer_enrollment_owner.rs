@@ -302,23 +302,23 @@ impl Owner {
             tokio::select! {
                 result = &mut request => break result,
                 _ = tokio::time::sleep(Duration::from_millis(25)) => {
-                    if self.check().is_err() {
+                    if self.check_document().is_err() {
                         self.lifetime.revoke();
                         let _ = request.await;
                         return Err(uncertain());
                     }
+                    // The setup request has its own capped deadline. Its
+                    // expiry does not revoke an independently consented share.
+
                 }
             }
         };
-        self.check()?;
-        match result {
-            Ok(response) => Ok(response),
-            Err(control::ControlFailure::RetirementUnknown) => {
-                self.lifetime.revoke();
-                Err(uncertain())
-            }
-            Err(_) => Err(uncertain()),
+        if matches!(result, Err(control::ControlFailure::RetirementUnknown)) {
+            self.lifetime.revoke();
+            return Err(uncertain());
         }
+        self.check()?;
+        result.map_err(|_| uncertain())
     }
     async fn listing(&self) -> Result<(Option<EnrollmentInvite>, Vec<EnrollmentPair>), SafeError> {
         match self.wire(Command::List).await? {

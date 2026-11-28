@@ -404,7 +404,7 @@ impl ObserverApproval {
             })
             .unwrap_or_else(|| {
                 if share_ordinary {
-                    "Share the unarchived session list from visible local projects while this desktop sharing window is active. This does not include archived sessions, changes, or terminal input.".into()
+                    "Share the unarchived session list from visible local projects until you stop sharing or CC Desk closes. This does not include archived sessions, changes, or terminal input.".into()
                 } else {
                     "No session is shared yet.".into()
                 }
