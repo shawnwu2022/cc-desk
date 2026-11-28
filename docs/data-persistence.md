@@ -314,3 +314,5 @@ The optional Rust DTO and metadata command tests remain NOT RUN in the current c
 checkout. Final Windows Rust CI and package testing must validate deserialization,
 atomic writes and old user data on the exact tested commit. See [U01–U10](superpowers/execution/U01-U10.md)
 for the unperformed gate inventory; no migration deletes old files or certifies D20.
+
+Desktop phone aliases are local display preferences. They are stored in WebView localStorage under the exact pairing tunnel and endpoint binding, are not sent over the relay, and are not used to identify, approve, or revoke a device. A new pairing does not inherit an unrelated alias.

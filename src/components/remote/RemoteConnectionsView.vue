@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted, ref, shallowRef, useId } from 'vue'
+import { computed, inject, onMounted, onUnmounted, reactive, ref, shallowRef, useId } from 'vue'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -118,6 +118,43 @@ const setup = shallowRef<Exclude<SetupResult, { kind: 'verified' }> | null>(null
 const publicRegistration = ref('')
 const setupCopied = ref(false)
 const snapshot = shallowRef<PairingSnapshot | null>(null)
+const aliasOverrides = reactive(new Map<string, string>())
+const editingAlias = ref('')
+const aliasDraft = ref('')
+const aliasError = ref(false)
+
+// 别名只在本机用于显示，不能参与识别、授权或发送到手机。
+function deviceAliasKey(device: ApprovedDevice) {
+  return 'cc-desk-phone-alias-v1:' + device.tunnel + ':' + device.endpointBinding
+}
+function validAlias(value: string) {
+  return value.length <= 64 && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(value)
+}
+function deviceAlias(device: ApprovedDevice) {
+  const key = deviceAliasKey(device)
+  const edited = aliasOverrides.get(key)
+  if (edited !== undefined) return edited
+  try {
+    const stored = localStorage.getItem(key)?.trim() ?? ''
+    return validAlias(stored) ? stored : ''
+  } catch { return '' }
+}
+function editDeviceAlias(device: ApprovedDevice) {
+  editingAlias.value = deviceAliasKey(device)
+  aliasDraft.value = deviceAlias(device)
+  aliasError.value = false
+}
+function saveDeviceAlias(device: ApprovedDevice) {
+  const key = deviceAliasKey(device)
+  const alias = aliasDraft.value.trim()
+  if (editingAlias.value !== key || !validAlias(alias)) return
+  try {
+    if (alias) localStorage.setItem(key, alias)
+    else localStorage.removeItem(key)
+    aliasOverrides.set(key, alias)
+    editingAlias.value = ''
+  } catch { aliasError.value = true }
+}
 const now = ref(Date.now())
 let disposed = false
 let ticker: ReturnType<typeof setInterval> | undefined
@@ -410,7 +447,16 @@ function cancel() {
         <p v-if="snapshot.devices.length === 0">{{ t('remotePairingEmpty') }}</p>
         <ul v-else class="devices">
           <li v-for="device in snapshot.devices" :key="device.tunnel">
-            <p>{{ t('remotePairingPhone') }} {{ device.phoneId.slice(-6) }}</p>
+            <p data-device-label>{{ deviceAlias(device) || t('remotePairingPhone') + ' ' + device.phoneId.slice(-6) }}</p>
+            <form v-if="editingAlias === deviceAliasKey(device)" @submit.prevent="saveDeviceAlias(device)">
+              <AppInput v-model="aliasDraft" data-device-alias-input :label="t('remoteDeviceAlias')" maxlength="64" autocomplete="off" />
+              <div class="actions">
+                <AppButton data-device-alias-save :disabled="!validAlias(aliasDraft.trim())" @click="saveDeviceAlias(device)">{{ t('remoteDeviceAliasSave') }}</AppButton>
+                <AppButton @click="editingAlias = ''">{{ t('remoteDeviceAliasCancel') }}</AppButton>
+              </div>
+              <p v-if="aliasError" role="alert">{{ t('remoteDeviceAliasFailed') }}</p>
+            </form>
+            <AppButton v-else data-device-alias-edit @click="editDeviceAlias(device)">{{ t('remoteDeviceAliasEdit') }}</AppButton>
             <p v-if="device.revocationPending" role="status">{{ t('remotePairingRevokePending') }}</p>
             <p v-else>{{ t(device.sharing === 'controlling' ? 'remotePairingControlActive' : device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : 'remotePairingNoScope') }}</p>
             <details><summary>{{ t('remotePairingDetails') }}</summary><dl>

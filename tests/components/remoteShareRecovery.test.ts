@@ -62,4 +62,21 @@ describe('Remote share error recovery', () => {
     expect(view.text()).not.toContain('private read detail')
     expect(view.get('[role="alert"]').text()).toBe(en.remotePairingFailed)
   })
+  it('RemoteShare_PersistsAliasWithoutChangingTheAuthorizedTarget_003', async () => {
+    try {
+      const initial = await setup()
+      await initial.view.get('[data-device-alias-edit]').trigger('click')
+      await initial.view.get('[data-device-alias-input]').setValue(' Test phone ')
+      await initial.view.get('[data-device-alias-save]').trigger('click')
+      expect(initial.view.get('[data-device-label]').text()).toBe('Test phone')
+      mounted.pop()!.unmount()
+      const reloaded = await setup()
+      expect(reloaded.view.get('[data-device-label]').text()).toBe('Test phone')
+      await reloaded.button(en.remotePairingShareStart).trigger('click')
+      await flushPromises()
+      expect(reloaded.share).toHaveBeenCalledExactlyOnceWith(phone, [{ runId: 'run-1', generation: 7, label: 'Codex 1' }])
+    } finally {
+      localStorage.clear()
+    }
+  })
 })
