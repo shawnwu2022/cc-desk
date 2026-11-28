@@ -72,11 +72,20 @@ impl TrustedHostProfile {
         owner: &Arc<crate::native_crypto::owner::NativeRevocation>,
         cap: Instant,
     ) -> Result<ApprovedSetup> {
+        let local = crate::native_crypto::owner::NativeRevocation::new();
+        self.catalogue_operation(owner, &local, cap)
+    }
+
+    pub(crate) fn catalogue_operation(
+        &self,
+        owner: &Arc<crate::native_crypto::owner::NativeRevocation>,
+        local: &Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: Instant,
+    ) -> Result<ApprovedSetup> {
         use crate::native_crypto::owner::NativeRevocation;
-        if Instant::now() >= cap || owner.is_revoked() {
+        if Instant::now() >= cap || owner.is_revoked() || local.is_revoked() {
             return Err(Error::Authority);
         }
-        let local = NativeRevocation::new();
         let roots = [
             owner.root_witness().ok_or(Error::Authority)?,
             local.root_witness().ok_or(Error::Authority)?,

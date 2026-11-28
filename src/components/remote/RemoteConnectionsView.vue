@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted, ref, shallowRef, useId } from 'vue'
+import { computed, inject, onMounted, onUnmounted, reactive, ref, shallowRef, useId } from 'vue'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -36,6 +36,12 @@ function shareCatalogueWith(device: ApprovedDevice, archived = false) {
   const scope = catalogueScope.value
   if (!scope || !verified.value?.shareCatalogue) return
   void perform(handle => archived ? handle.shareCatalogue!(device, scope, 'archived') : handle.shareCatalogue!(device, scope), true)
+}
+const advancedSharing = ref(false)
+const showAdvancedSharing = computed(() => !verified.value?.startOrdinaryCatalogueRead || advancedSharing.value)
+function startOrdinaryCatalogueWith(device: ApprovedDevice) {
+  if (!verified.value?.startOrdinaryCatalogueRead || device.sharing !== 'none' || device.revocationPending) return
+  void perform(handle => handle.startOrdinaryCatalogueRead!(device), true)
 }
 function startManagementWith(device: ApprovedDevice) {
   if (!verified.value?.startManagement) return
@@ -80,7 +86,16 @@ async function initializeNativeSetup() {
         } }
       },
     }
-  } catch { /* Unsupported builds have no native capability. */ }
+    if (disposed || !port.value || endpoint.value || busy.value) return
+    const resumed = await nativeObserverSetup({ action: 'resume' }) as { kind?: unknown; ticket?: unknown; endpoint?: unknown; snapshot?: PairingSnapshot }
+    if (resumed.kind !== 'resumed' || typeof resumed.ticket !== 'string' || typeof resumed.endpoint !== 'string' || !resumed.snapshot) return
+    if (disposed || endpoint.value || busy.value || verified.value) return
+    const handle = boundNativePairing(resumed.ticket, resumed.endpoint)
+    endpoint.value = handle.endpoint
+    verified.value = handle
+    snapshot.value = resumed.snapshot
+    now.value = Date.now()
+  } catch { /* No admitted native owner to resume. */ }
 }
 function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
   async function request(action: string, args: Record<string, unknown> = {}) {
@@ -94,11 +109,12 @@ function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
     current: () => request('current'),
     create: minutes => request('create', { minutes }),
     cancel: inviteId => request('cancel', { inviteId }),
-    approve: (target, scopeChoiceId) => request('approve', { target, scopeChoiceId }),
+    approve: (target, scopeChoiceId, shareOrdinary) => request('approve', { target, scopeChoiceId, ...(shareOrdinary ? { shareOrdinary: true } : {}) }),
     reject: target => request('reject', { target }),
     revoke: device => request('revoke', { target: target(device) }),
     share: (device, runs) => request('startSharing', { target: target(device), runs }),
     shareCatalogue: (device, scope, mode) => request('startCatalogueRead', { target: target(device), scope, ...(mode ? { mode } : {}) }),
+    startOrdinaryCatalogueRead: device => request('startOrdinaryCatalogueRead', { target: target(device) }),
     startManagement: device => request('startManagement', { target: target(device) }),
     stopSharing: () => request('stopSharing'),
   }
@@ -118,6 +134,45 @@ const setup = shallowRef<Exclude<SetupResult, { kind: 'verified' }> | null>(null
 const publicRegistration = ref('')
 const setupCopied = ref(false)
 const snapshot = shallowRef<PairingSnapshot | null>(null)
+const aliasOverrides = reactive(new Map<string, string>())
+const editingAlias = ref('')
+const aliasDraft = ref('')
+const aliasError = ref(false)
+
+// 别名只在本机用于显示，不能参与识别、授权或发送到手机。
+function deviceAliasKey(device: ApprovedDevice) {
+  return 'cc-desk-phone-alias-v1:' + device.tunnel + ':' + device.endpointBinding
+}
+function validAlias(value: string) {
+  return value.length <= 64 && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(value)
+}
+function deviceAlias(device: ApprovedDevice) {
+  const key = deviceAliasKey(device)
+  const edited = aliasOverrides.get(key)
+  if (edited !== undefined) return edited
+  try {
+    const stored = localStorage.getItem(key)?.trim() ?? ''
+    return validAlias(stored) ? stored : ''
+  } catch { return '' }
+}
+function editDeviceAlias(device: ApprovedDevice) {
+  editingAlias.value = deviceAliasKey(device)
+  aliasDraft.value = deviceAlias(device)
+  aliasError.value = false
+}
+function saveDeviceAlias(device: ApprovedDevice) {
+  const key = deviceAliasKey(device)
+  const alias = aliasDraft.value.trim()
+  if (editingAlias.value !== key || !validAlias(alias)) return
+  try {
+    if (alias) localStorage.setItem(key, alias)
+    else localStorage.removeItem(key)
+    aliasOverrides.set(key, alias)
+    editingAlias.value = ''
+  } catch { aliasError.value = true }
+}
+const setupExpired = computed(() => snapshot.value?.setupExpired === true)
+const shareInProgress = computed(() => snapshot.value?.devices.some(device => device.sharing !== 'none') === true)
 const now = ref(Date.now())
 let disposed = false
 let ticker: ReturnType<typeof setInterval> | undefined
@@ -129,7 +184,7 @@ async function readWaitingInvitation() {
   const prior = snapshot.value
   const id = prior?.invite?.inviteId
   const pendingInvite = !!id && inviteLive.value && !prior?.pending.some(request => request.inviteId === id)
-  const offeredShare = !!prior?.devices.some(device => device.sharing === 'offered')
+  const offeredShare = !!prior?.devices.some(device => device.sharing === 'offered' || device.sharing === 'reconnecting')
   if (disposed || busy.value || invitationRead || !handle || !prior
     || (!pendingInvite && !offeredShare) || now.value - lastInvitationRead < 3000) return
   lastInvitationRead = now.value
@@ -148,7 +203,7 @@ async function readWaitingInvitation() {
 
 onMounted(() => {
   ticker = setInterval(() => {
-    if (!invite.value && !snapshot.value?.devices.some(device => device.sharing === 'offered')) return
+    if (!invite.value && !snapshot.value?.devices.some(device => device.sharing === 'offered' || device.sharing === 'reconnecting')) return
     now.value = Date.now()
     void readWaitingInvitation()
   }, 1000)
@@ -161,6 +216,14 @@ const scopeOptions = computed(() => [
   { value: '', label: t('remotePairingScopePlaceholder') },
   ...(snapshot.value?.scopeChoices ?? []).map(scope => ({ value: scope.id, label: scope.label })),
 ])
+function toggleAdvancedSharing() {
+  advancedSharing.value = !advancedSharing.value
+  if (!advancedSharing.value) {
+    selectedScope.value = ''
+    selectedShares.value = []
+    enableControl.value = false
+  }
+}
 const scopeValid = computed(() => !selectedScope.value || !!snapshot.value?.scopeChoices.some(scope => scope.id === selectedScope.value))
 const invite = computed(() => snapshot.value?.invite ?? null)
 const inviteLive = computed(() => !!invite.value && invite.value.expiresUnixMs > now.value)
@@ -181,7 +244,7 @@ const qr = computed(() => {
 })
 
 function setEndpoint(value: string) {
-  if (busy.value) return
+  if (busy.value || shareInProgress.value) return
   endpoint.value = value
   selectedScope.value = ''
   setup.value = null
@@ -193,7 +256,7 @@ function setEndpoint(value: string) {
 async function verify() {
   const input = endpoint.value.trim()
   const bridge = port.value
-  if (!bridge || !endpointReady.value || busy.value) return
+  if (!bridge || !endpointReady.value || busy.value || shareInProgress.value) return
   verified.value = null
   snapshot.value = null
   selectedScope.value = ''
@@ -298,11 +361,12 @@ function create() {
   const value = Number(minutes.value)
   if (snapshot.value && !inviteLive.value && (value === 1 || value === 5 || value === 10)) void perform(handle => handle.create(value))
 }
-function decide(request: PendingPairing, approve: boolean) {
+function decide(request: PendingPairing, approve: boolean, shareOrdinary = false) {
   const active = invite.value
   if (active && active.inviteId === request.inviteId && active.expiresUnixMs > Date.now()) {
     if (!approve) { void perform(handle => handle.reject(request)); return }
     const scope = selectedScope.value
+    if (shareOrdinary) { void perform(handle => handle.approve(request, null, true), true); return }
     if (scopeValid.value) void perform(handle => handle.approve(request, scope || null))
   }
 }
@@ -318,14 +382,14 @@ function cancel() {
     <section v-else class="pairing" :aria-label="t('remotePairingTitle')">
       <h2>{{ t('remotePairingTitle') }}</h2>
       <p>{{ t('remotePairingObserverHint') }}</p>
-      <AppInput :model-value="endpoint" :label="t('remotePairingEndpoint')" :disabled="busy"
+      <AppInput :model-value="endpoint" :label="t('remotePairingEndpoint')" :disabled="busy || shareInProgress"
         autocomplete="off" spellcheck="false" maxlength="2048" :described-by="endpointHintId" @update:model-value="setEndpoint" />
       <p :id="endpointHintId">{{ t('remotePairingEndpointHint') }}</p>
       <div class="actions">
         <AppButton v-if="!verified" variant="primary" :disabled="busy || !endpointReady" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
         <template v-else>
           <AppButton variant="ghost" :disabled="busy" @click="perform(handle => handle.current())">{{ t('remotePairingRefresh') }}</AppButton>
-          <AppButton v-if="failure" variant="ghost" :disabled="busy" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
+          <AppButton v-if="(failure || setupExpired) && !shareInProgress" variant="ghost" :disabled="busy" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
         </template>
       </div>
       <p v-if="verified" role="status">{{ t('remotePairingVerified', { endpoint: verified.endpoint }) }}</p>
@@ -349,7 +413,8 @@ function cancel() {
         <div class="actions"><AppButton @click="copyRegistration">{{ t(setupCopied ? 'remotePairingCopied' : 'remotePairingCopy') }}</AppButton></div>
       </div>
       <template v-if="snapshot">
-        <template v-if="invite">
+        <p v-if="setupExpired" role="status">{{ t('remotePairingSetupExpired') }}</p>
+        <template v-if="invite && !setupExpired">
           <h3>{{ t('remotePairingInvite') }}</h3>
           <p>{{ inviteLive ? t('remotePairingExpires', { time: timeLeft }) : t('remotePairingExpired') }}</p>
           <template v-if="inviteLive && !busy">
@@ -363,16 +428,20 @@ function cancel() {
           </template>
           <AppButton :disabled="busy" @click="cancel">{{ t('remotePairingCancel') }}</AppButton>
         </template>
-        <template v-if="!inviteLive">
+        <template v-if="!inviteLive && !setupExpired">
           <div class="actions"><AppButton variant="primary" :disabled="busy" @click="create">{{ t(invite ? 'remotePairingRegenerate' : 'remotePairingCreate') }}</AppButton></div>
           <details><summary>{{ t('remotePairingAdvanced') }}</summary>
             <AppSelect v-model="minutes" :label="t('remotePairingTtl')" :options="ttlOptions" :disabled="busy" />
           </details>
         </template>
+        <AppButton v-if="!setupExpired && verified?.startOrdinaryCatalogueRead && (snapshot.devices.length || snapshot.pending.length)"
+          data-toggle-advanced-sharing :aria-expanded="advancedSharing" :disabled="busy" @click="toggleAdvancedSharing">
+          {{ t(advancedSharing ? 'remoteHideAdvancedSharing' : 'remoteShowAdvancedSharing') }}
+        </AppButton>
         <h3>{{ t('remotePairingPending') }}</h3>
         <p v-if="snapshot.pending.length === 0">{{ t('remotePairingEmpty') }}</p>
         <template v-else>
-          <AppSelect v-if="snapshot.scopeChoices.length > 0" v-model="selectedScope" :label="t('remotePairingScope')" :options="scopeOptions" :disabled="busy" />
+          <AppSelect v-if="showAdvancedSharing && snapshot.scopeChoices.length > 0" v-model="selectedScope" :label="t('remotePairingScope')" :options="scopeOptions" :disabled="busy" />
           <ul class="devices">
           <li v-for="request in snapshot.pending" :key="request.requestId">
             <p>{{ t('remotePairingPhone') }}</p>
@@ -383,8 +452,11 @@ function cancel() {
               <dt>{{ t('remotePairingBinding') }}</dt><dd><code>{{ request.endpointBinding }}</code></dd>
             </dl></details>
             <div class="actions">
-              <AppButton variant="primary" :disabled="busy || !inviteLive || !scopeValid || request.inviteId !== invite?.inviteId"
-                @click="decide(request, true)">{{ t('remotePairingApprove') }}</AppButton>
+              <AppButton v-if="verified?.startOrdinaryCatalogueRead" variant="primary" data-pair-and-share
+                :disabled="busy || !inviteLive || request.inviteId !== invite?.inviteId"
+                @click="decide(request, true, true)">{{ t('remotePairAndShareOrdinary') }}</AppButton>
+              <AppButton v-if="showAdvancedSharing" :disabled="busy || !inviteLive || !scopeValid || request.inviteId !== invite?.inviteId"
+                @click="decide(request, true)">{{ t(verified?.startOrdinaryCatalogueRead ? 'remotePairingApproveDevice' : 'remotePairingApprove') }}</AppButton>
               <AppButton :disabled="busy || !inviteLive || request.inviteId !== invite?.inviteId"
                 @click="decide(request, false)">{{ t('remotePairingReject') }}</AppButton>
             </div>
@@ -392,7 +464,9 @@ function cancel() {
         </ul>
         </template>
         <h3>{{ t('remotePairingDevices') }}</h3>
-        <fieldset v-if="verified?.share && snapshot.devices.some(device => !device.revocationPending)">
+        <p v-if="snapshot.ordinaryShareUnavailable" role="status">{{ t('remotePairAndShareUnavailable') }}</p>
+        <template v-if="showAdvancedSharing && !setupExpired">
+        <fieldset v-if="verified?.share && snapshot.devices.some(device => !device.revocationPending)" data-advanced-share-options>
           <legend>{{ t('remotePairingShareChoose') }}</legend>
           <p v-if="shareChoices.length === 0">{{ t('remotePairingShareNoRuns') }}</p>
           <label v-if="selectedShares.length" class="share-choice"><input v-model="enableControl" type="checkbox" :disabled="busy" /> {{ t('remotePairingAllowControl') }}</label>
@@ -407,12 +481,22 @@ function cancel() {
           <AppSelect v-if="catalogueCliOptions.some(option => option.value !== 'codex' && !option.disabled)" :model-value="catalogueCli" label="CLI" :options="catalogueCliOptions" :disabled="busy" @update:model-value="value => { if (value === 'codex' || value === 'opencode' || value === 'claude') catalogueCli = value }" />
           <AppSelect v-model="catalogueProject" :label="t('remoteCatalogueProject')" :options="catalogueOptions" :disabled="busy" />
         </fieldset>
+        </template>
         <p v-if="snapshot.devices.length === 0">{{ t('remotePairingEmpty') }}</p>
         <ul v-else class="devices">
           <li v-for="device in snapshot.devices" :key="device.tunnel">
-            <p>{{ t('remotePairingPhone') }} {{ device.phoneId.slice(-6) }}</p>
+            <p data-device-label>{{ deviceAlias(device) || t('remotePairingPhone') + ' ' + device.phoneId.slice(-6) }}</p>
+            <form v-if="editingAlias === deviceAliasKey(device)" @submit.prevent="saveDeviceAlias(device)">
+              <AppInput v-model="aliasDraft" data-device-alias-input :label="t('remoteDeviceAlias')" maxlength="64" autocomplete="off" />
+              <div class="actions">
+                <AppButton data-device-alias-save :disabled="!validAlias(aliasDraft.trim())" @click="saveDeviceAlias(device)">{{ t('remoteDeviceAliasSave') }}</AppButton>
+                <AppButton @click="editingAlias = ''">{{ t('remoteDeviceAliasCancel') }}</AppButton>
+              </div>
+              <p v-if="aliasError" role="alert">{{ t('remoteDeviceAliasFailed') }}</p>
+            </form>
+            <AppButton v-else data-device-alias-edit @click="editDeviceAlias(device)">{{ t('remoteDeviceAliasEdit') }}</AppButton>
             <p v-if="device.revocationPending" role="status">{{ t('remotePairingRevokePending') }}</p>
-            <p v-else>{{ t(device.sharing === 'controlling' ? 'remotePairingControlActive' : device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : 'remotePairingNoScope') }}</p>
+            <p v-else>{{ t(device.sharing === 'controlling' ? 'remotePairingControlActive' : device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : device.sharing === 'reconnecting' ? 'remotePairingShareReconnecting' : 'remotePairingNoScope') }}</p>
             <details><summary>{{ t('remotePairingDetails') }}</summary><dl>
               <dt>{{ t('remotePairingPhoneId') }}</dt><dd>{{ device.phoneId }}</dd>
               <dt>{{ t('remotePairingRelayKey') }}</dt><dd><code>{{ device.phoneRelayPublicKeySec1 }}</code></dd>
@@ -420,11 +504,13 @@ function cancel() {
               <dt>{{ t('remotePairingBinding') }}</dt><dd><code>{{ device.endpointBinding }}</code></dd>
             </dl></details>
             <div class="actions">
-              <AppButton v-if="verified?.share && device.sharing === 'none' && !device.revocationPending" :disabled="busy || selectedShares.length === 0" @click="shareWith(device)">{{ t('remotePairingShareStart') }}</AppButton>
-              <AppButton v-if="verified?.shareCatalogue && device.sharing === 'none' && !device.revocationPending" :disabled="busy || !catalogueScope" @click="shareCatalogueWith(device)">{{ t('remoteCatalogueStart') }}</AppButton>
-              <AppButton v-if="verified?.shareCatalogue && device.sharing === 'none' && !device.revocationPending" :disabled="busy || !catalogueScope" @click="shareCatalogueWith(device, true)">{{ t('remoteCatalogueArchiveStart') }}</AppButton>
-              <AppButton v-if="verified?.startManagement && device.sharing === 'none' && !device.revocationPending" :disabled="busy" @click="startManagementWith(device)">{{ t('remoteManagementStart') }}</AppButton>
-              <AppButton v-if="verified?.stopSharing && device.sharing !== 'none'" :disabled="busy" @click="perform(handle => handle.stopSharing!())">{{ t('remotePairingShareStop') }}</AppButton>
+              <AppButton v-if="!setupExpired && verified?.startOrdinaryCatalogueRead && device.sharing === 'none' && !device.revocationPending"
+                data-start-ordinary-catalogue variant="primary" :disabled="busy" @click="startOrdinaryCatalogueWith(device)">{{ t('remoteShareOrdinaryCatalogue') }}</AppButton>
+              <AppButton v-if="!setupExpired && showAdvancedSharing && verified?.share && device.sharing === 'none' && !device.revocationPending" :disabled="busy || selectedShares.length === 0" @click="shareWith(device)">{{ t('remotePairingShareStart') }}</AppButton>
+              <AppButton v-if="!setupExpired && showAdvancedSharing && verified?.shareCatalogue && device.sharing === 'none' && !device.revocationPending" :disabled="busy || !catalogueScope" @click="shareCatalogueWith(device)">{{ t('remoteCatalogueStart') }}</AppButton>
+              <AppButton v-if="!setupExpired && showAdvancedSharing && verified?.shareCatalogue && device.sharing === 'none' && !device.revocationPending" :disabled="busy || !catalogueScope" @click="shareCatalogueWith(device, true)">{{ t('remoteCatalogueArchiveStart') }}</AppButton>
+              <AppButton v-if="!setupExpired && showAdvancedSharing && verified?.startManagement && device.sharing === 'none' && !device.revocationPending" :disabled="busy" @click="startManagementWith(device)">{{ t('remoteManagementStart') }}</AppButton>
+              <AppButton v-if="verified?.stopSharing && device.sharing !== 'none'" :disabled="busy" @click="perform(handle => handle.stopSharing!(), true)">{{ t('remotePairingShareStop') }}</AppButton>
               <AppButton variant="danger" :disabled="busy" @click="perform(handle => handle.revoke(device))">{{ t('remotePairingRevoke') }}</AppButton>
             </div>
           </li>

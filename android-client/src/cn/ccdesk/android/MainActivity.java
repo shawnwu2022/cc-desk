@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -18,16 +20,21 @@ import java.util.UUID;
 
 public final class MainActivity extends Activity {
     private static final String HOME_SESSIONS = "home.sessions";
+    private static final long ORDINARY_RETRY_MS = 5 * 60_000L;
     private LinearLayout content;
     private RemoteHomeView home;
     private SessionBrowser sessionBrowser;
     private boolean showingSessions;
     private boolean projectionForeground;
+    private final java.util.Set<UUID> initialSessionLoads = new java.util.HashSet<>();
+    private final Handler sessionRetryHandler = new Handler(Looper.getMainLooper());
+    private final Runnable retryOrdinarySessions = this::retryOrdinarySessionsWhileForeground;
     private final java.util.Map<UUID, TextView> managementViewports = new java.util.HashMap<>();
     private boolean lastHomeSessions;
     private UUID lastHomeSelection;
     private DesktopStore store;
     private NativeDesktopBackend backend;
+    private boolean restoringDevices;
     private boolean pairingPending;
     private boolean cancellingEnrollment;
     private enum PairingNotice { NONE, FAILED, SAVED, CANCELLED, CANCEL_UNCONFIRMED }
@@ -67,8 +74,15 @@ public final class MainActivity extends Activity {
         }
         active = true;
         if (backend != null) {
-            try { backend.restore(store.read(), identities); }
-            catch (IOException ignored) {}
+            try {
+                restoringDevices = true;
+                backend.restore(store.read(), identities, () -> {
+                    restoringDevices = false;
+                    if (active) render();
+                });
+            } catch (IOException ignored) {
+                restoringDevices = false;
+            }
         }
         render();
     }
@@ -154,6 +168,9 @@ public final class MainActivity extends Activity {
             } else if (pairingNotice == PairingNotice.CANCEL_UNCONFIRMED) {
                 home.title(card, "无法确认配对已取消", 20, true);
                 home.body(card, "请检查设备列表。如果该电脑已配对，可在电脑端撤销手机授权。", 15);
+            } else if (restoringDevices && rows.isEmpty()) {
+                home.title(card, "正在恢复设备", 20, true);
+                home.body(card, "正在检查本机保存的配对记录。", 15);
             } else if (rows.isEmpty()) {
                 home.title(card, "配对第一台电脑", 20, true);
                 home.body(card, "在电脑的远程连接页创建邀请，用手机扫描二维码或输入配对码。", 15);
@@ -177,7 +194,7 @@ public final class MainActivity extends Activity {
                     refreshDesktop(row);
                 }).setContentDescription("查看 " + name + " 的会话");
             }
-            home.action(card, "设备设置", false, () -> editDesktopAlias(row, name))
+            home.action(card, "改别名", false, () -> editDesktopAlias(row, name))
                 .setContentDescription("打开 " + name + " 的设备设置");
         }
     }
@@ -383,6 +400,35 @@ public final class MainActivity extends Activity {
     private boolean canRefresh(DesktopBackend.State state) {
         return state == DesktopBackend.State.DISCONNECTED || state == DesktopBackend.State.UNAVAILABLE
             || state == DesktopBackend.State.CATALOGUE_READY;
+    }
+
+    private void loadInitialOrdinarySessions() {
+        if (!active || !projectionForeground || backend == null || controlPanel != null) return;
+        try {
+            for (DesktopBackend.Desktop row : store.read()) {
+                if (canUseDesktop(row) && backend.state(row) == DesktopBackend.State.DISCONNECTED
+                        && initialSessionLoads.add(row.localId)) refreshDesktop(row);
+            }
+        } catch (IOException ignored) {
+            // 设备页继续展示现有的本地读取失败提示。
+        }
+    }
+
+    private void retryOrdinarySessionsWhileForeground() {
+        if (!active || !projectionForeground) return;
+        if (backend != null && controlPanel == null) {
+            try {
+                for (DesktopBackend.Desktop row : store.read()) {
+                    if (!canUseDesktop(row) || !initialSessionLoads.contains(row.localId)) continue;
+                    DesktopBackend.State state = backend.state(row);
+                    if (state == DesktopBackend.State.DISCONNECTED
+                            || state == DesktopBackend.State.UNAVAILABLE) refreshDesktop(row);
+                }
+            } catch (IOException ignored) {
+                // 不从读失败的索引推断设备或授权。
+            }
+        }
+        sessionRetryHandler.postDelayed(retryOrdinarySessions, ORDINARY_RETRY_MS);
     }
 
     private void refreshDesktop(DesktopBackend.Desktop desktop) {
@@ -626,6 +672,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateConnectionViews() {
+        loadInitialOrdinarySessions();
         if (controlPanel == null) { render(); return; }
         DesktopBackend.Desktop desktop = controlDesktop;
         long original = controlHandle;
@@ -686,10 +733,13 @@ public final class MainActivity extends Activity {
     @Override protected void onStart() {
         super.onStart();
         projectionForeground = true;
+        sessionRetryHandler.postDelayed(retryOrdinarySessions, ORDINARY_RETRY_MS);
+        loadInitialOrdinarySessions();
     }
 
     @Override protected void onStop() {
         projectionForeground = false;
+        sessionRetryHandler.removeCallbacks(retryOrdinarySessions);
         if (controlPanel != null) leaveControl(true);
         stopManagementViews();
         super.onStop();
@@ -877,7 +927,11 @@ public final class MainActivity extends Activity {
         render();
         DesktopBackend.EnrollmentCallback completion = new DesktopBackend.EnrollmentCallback() {
             @Override public void approved(DesktopBackend.Desktop desktop) {
-                runOnUiThread(() -> finishEnrollment(epoch, PairingNotice.SAVED));
+                runOnUiThread(() -> {
+                    if (!active || epoch != enrollmentEpoch) return;
+                    finishEnrollment(epoch, PairingNotice.SAVED);
+                    loadInitialOrdinarySessions();
+                });
             }
             @Override public void state(DesktopBackend.State state) {
                 if (state != DesktopBackend.State.WAITING_FOR_DESKTOP)

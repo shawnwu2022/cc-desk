@@ -5,9 +5,11 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.hardware.Camera;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.PlanarYUVLuminanceSource;
@@ -24,6 +26,11 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
     private Camera camera;
     private SurfaceHolder surface;
+    private FrameLayout previewContainer;
+    private SurfaceView preview;
+    private int frameWidth;
+    private int frameHeight;
+    private int displayRotation;
     private boolean resumed;
     private boolean openingPermissionDialog;
     private long epoch;
@@ -33,9 +40,15 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         try { owner = java.util.UUID.fromString(getIntent().getStringExtra(SCAN_OWNER)); }
         catch (IllegalArgumentException | NullPointerException e) { finish(); return; }
-        SurfaceView view = new SurfaceView(this);
-        view.getHolder().addCallback(this);
-        setContentView(view);
+        previewContainer = new FrameLayout(this);
+        previewContainer.setBackgroundColor(android.graphics.Color.BLACK);
+        preview = new SurfaceView(this);
+        previewContainer.addView(preview, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+        previewContainer.addOnLayoutChangeListener(
+            (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> fitPreview());
+        preview.getHolder().addCallback(this);
+        setContentView(previewContainer);
     }
 
     @Override protected void onResume() {
@@ -84,7 +97,8 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
             }
             if (id < 0) throw new IllegalStateException();
             camera = Camera.open(id);
-            camera.setDisplayOrientation((info.orientation - getWindowManager().getDefaultDisplay().getRotation() * 90 + 360) % 360);
+            displayRotation = (info.orientation - getWindowManager().getDefaultDisplay().getRotation() * 90 + 360) % 360;
+            camera.setDisplayOrientation(displayRotation);
             Camera.Parameters params = camera.getParameters();
             params.setPreviewFormat(android.graphics.ImageFormat.NV21);
             Camera.Size size = null;
@@ -97,6 +111,9 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
             params.setPreviewSize(size.width, size.height);
             ListFocus.apply(params);
             camera.setParameters(params);
+            frameWidth = size.width;
+            frameHeight = size.height;
+            fitPreview();
             camera.setPreviewDisplay(surface);
             camera.startPreview();
             next(++epoch, size.width, size.height);
@@ -105,6 +122,17 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
             Toast.makeText(this, "相机不可用，请返回并输入配对码", Toast.LENGTH_LONG).show();
             finish();
         }
+    }
+
+    private void fitPreview() {
+        int[] size = ScanPreviewGeometry.fit(previewContainer.getWidth(), previewContainer.getHeight(),
+            frameWidth, frameHeight, displayRotation);
+        if (size[0] == 0 || size[1] == 0) return;
+        FrameLayout.LayoutParams layout = (FrameLayout.LayoutParams) preview.getLayoutParams();
+        if (layout.width == size[0] && layout.height == size[1]) return;
+        layout.width = size[0];
+        layout.height = size[1];
+        preview.setLayoutParams(layout);
     }
 
     private static final class ListFocus {

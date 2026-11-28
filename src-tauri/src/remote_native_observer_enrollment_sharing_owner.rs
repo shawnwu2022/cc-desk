@@ -5,6 +5,34 @@ use cc_desk_remote_transport::wss::{
 };
 use std::sync::atomic::{AtomicU8, Ordering};
 
+#[derive(Default)]
+pub(super) struct PendingCatalogueClear(parking_lot::Mutex<Option<[u8; 32]>>);
+
+impl PendingCatalogueClear {
+    pub(super) fn remember(&self, digest: [u8; 32]) {
+        *self.0.lock() = Some(digest);
+    }
+
+    async fn confirm<F: std::future::Future<Output = bool>>(
+        &self,
+        clear: impl FnOnce([u8; 32]) -> F,
+    ) -> bool {
+        let digest = *self.0.lock();
+        let Some(digest) = digest else {
+            return false;
+        };
+        if !clear(digest).await {
+            return false;
+        }
+        let mut pending = self.0.lock();
+        if *pending != Some(digest) {
+            return false;
+        }
+        *pending = None;
+        true
+    }
+}
+
 pub(super) struct Task {
     pub(super) tunnel: [u8; 16],
     phase: Arc<AtomicU8>,
@@ -12,6 +40,8 @@ pub(super) struct Task {
     join: tokio::task::JoinHandle<Result<(), SafeError>>,
     result: Option<Result<(), SafeError>>,
     retired: Arc<std::sync::atomic::AtomicBool>,
+    catalogue_lifetime: Option<Arc<NativeRevocation>>,
+    pending_clear: Option<Arc<PendingCatalogueClear>>,
 }
 impl Task {
     pub(super) fn new(
@@ -20,6 +50,8 @@ impl Task {
         stop: tokio::sync::watch::Sender<bool>,
         join: tokio::task::JoinHandle<Result<(), SafeError>>,
         retired: Arc<std::sync::atomic::AtomicBool>,
+        catalogue_lifetime: Arc<NativeRevocation>,
+        pending_clear: Arc<PendingCatalogueClear>,
     ) -> Self {
         Self {
             tunnel,
@@ -28,37 +60,141 @@ impl Task {
             join,
             retired,
             result: None,
+            catalogue_lifetime: Some(catalogue_lifetime),
+            pending_clear: Some(pending_clear),
         }
     }
 
     pub(super) fn phase(&self) -> u8 {
         self.phase.load(Ordering::Acquire)
     }
-    async fn stop(&mut self) -> Result<(), SafeError> {
+    fn signal_stop(&self) {
+        if let Some(lifetime) = &self.catalogue_lifetime {
+            lifetime.revoke();
+        }
         self.stop.send_replace(true);
-        if let Some(result) = &self.result {
-            return if self.retired.load(Ordering::Acquire) {
-                Ok(())
-            } else {
-                result.clone()
-            };
+    }
+
+    async fn stop<F: std::future::Future<Output = bool>>(
+        &mut self,
+        clear: impl FnOnce([u8; 16], [u8; 32]) -> F,
+    ) -> Result<(), SafeError> {
+        self.signal_stop();
+        if self.result.is_none() {
+            let joined = tokio::time::timeout(Duration::from_secs(10), &mut self.join)
+                .await
+                .map_err(|_| uncertain())?;
+            self.result = Some(match joined {
+                Ok(result) => result,
+                Err(_) => {
+                    self.pending_clear = None;
+                    self.retired.store(false, Ordering::Release);
+                    Err(uncertain())
+                }
+            });
         }
-        let result = tokio::time::timeout(Duration::from_secs(10), &mut self.join)
-            .await
-            .map_err(|_| uncertain())?
-            .map_err(|_| uncertain())
-            .and_then(|r| r);
-        self.result = Some(result.clone());
         if self.retired.load(Ordering::Acquire) {
-            Ok(())
-        } else {
-            result
+            return Ok(());
         }
+        if let Some(pending) = &self.pending_clear {
+            let tunnel = self.tunnel;
+            if pending.confirm(|digest| clear(tunnel, digest)).await {
+                self.retired.store(true, Ordering::Release);
+                self.phase.store(0, Ordering::Release);
+                return Ok(());
+            }
+        }
+        let result = self.result.clone().and_then(Result::err);
+        Err(result.unwrap_or_else(uncertain))
     }
 }
 impl Drop for Task {
     fn drop(&mut self) {
-        self.stop.send_replace(true);
+        self.signal_stop();
+    }
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+    use std::{cell::Cell, future::ready, sync::atomic::AtomicBool};
+
+    #[tokio::test]
+    async fn repeated_stop_retries_only_the_pending_joined_digest() {
+        let tunnel = [2; 16];
+        let digest = [7; 32];
+        let pending = Arc::new(PendingCatalogueClear::default());
+        let record = pending.clone();
+        let lifetime = NativeRevocation::new();
+        let (stop, mut received) = tokio::sync::watch::channel(false);
+        let join = tokio::spawn(async move {
+            received.changed().await.unwrap();
+            record.remember(digest);
+            Err(uncertain())
+        });
+        let mut task = Task::new(
+            tunnel,
+            Arc::new(AtomicU8::new(3)),
+            stop,
+            join,
+            Arc::new(AtomicBool::new(false)),
+            lifetime.clone(),
+            pending,
+        );
+        let attempts = Cell::new(0);
+        assert!(task
+            .stop(|t, d| {
+                assert!(lifetime.is_revoked());
+                assert_eq!((t, d), (tunnel, digest));
+                attempts.set(attempts.get() + 1);
+                ready(false)
+            })
+            .await
+            .is_err());
+        assert!(task
+            .stop(|t, d| {
+                assert_eq!((t, d), (tunnel, digest));
+                attempts.set(attempts.get() + 1);
+                ready(true)
+            })
+            .await
+            .is_ok());
+        assert_eq!(task.phase(), 0);
+        assert!(task
+            .stop(|_, _| async { panic!("a confirmed clear must not repeat") })
+            .await
+            .is_ok());
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn neither_an_unjoined_endpoint_nor_join_failure_can_attempt_clear() {
+        for panicked in [false, true] {
+            let pending = Arc::new(PendingCatalogueClear::default());
+            if panicked {
+                pending.remember([7; 32]);
+            }
+            let (stop, _) = tokio::sync::watch::channel(false);
+            let join = tokio::spawn(async move {
+                assert!(!panicked, "simulate a failed task join");
+                Err(uncertain())
+            });
+            let mut task = Task::new(
+                [2; 16],
+                Arc::new(AtomicU8::new(3)),
+                stop,
+                join,
+                Arc::new(AtomicBool::new(false)),
+                NativeRevocation::new(),
+                pending,
+            );
+            for _ in 0..2 {
+                assert!(task
+                    .stop(|_, _| async { panic!("no proven joined digest") })
+                    .await
+                    .is_err());
+            }
+        }
     }
 }
 
@@ -153,22 +289,38 @@ impl Owner {
             join,
             result: None,
             retired,
+            catalogue_lifetime: None,
+            pending_clear: None,
         });
         self.snapshot(&mut cache).await
     }
     pub(crate) async fn stop_sharing(&self) -> Result<Snapshot, SafeError> {
+        self.check_document()?;
         let mut cache = self
             .state
             .try_lock()
             .map_err(|_| error("REMOTE_PAIRING_BUSY"))?;
         self.stop_share(None).await?;
-        self.snapshot(&mut cache).await
+        // Stopping an existing share does not cancel a separate invitation.
+        // Refresh it only after the local share has retired. In an expired or
+        // unavailable setup, do not present an unverifiable pending request.
+        if cache.invite.is_some() && Instant::now() < self.deadline {
+            if let Ok(snapshot) = self.snapshot(&mut cache).await {
+                return Ok(snapshot);
+            }
+        }
+        self.local_status().await
     }
     pub(super) async fn stop_share(&self, tunnel: Option<[u8; 16]>) -> Result<(), SafeError> {
         let mut slot = self.sharing.lock().await;
         if let Some(task) = &mut *slot {
             if tunnel.is_none_or(|id| id == task.tunnel) {
-                let result = task.stop().await;
+                let result = task
+                    .stop(|tunnel, digest| async move {
+                        self.clear_exact_catalogue(tunnel, digest).await
+                            == super::catalogue_owner::ExactClear::Confirmed
+                    })
+                    .await;
                 if result.is_err() {
                     return result;
                 }

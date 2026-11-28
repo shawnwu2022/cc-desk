@@ -40,6 +40,7 @@ enum Action {
         endpoint: String,
     },
     Available,
+    Resume,
     Verify {
         endpoint: String,
     },
@@ -65,6 +66,8 @@ enum Action {
         ticket: String,
         target: Pending,
         scope_choice_id: Option<String>,
+        #[serde(default)]
+        share_ordinary: bool,
     },
     Revoke {
         ticket: String,
@@ -80,6 +83,10 @@ enum Action {
         target: DeviceTarget,
         scope: crate::cli::native_projection::wire::ScopeTarget,
         mode: Option<cc_desk_remote_security::session_catalogue::ListMode>,
+    },
+    StartOrdinaryCatalogueRead {
+        ticket: String,
+        target: DeviceTarget,
     },
     StartManagement {
         ticket: String,
@@ -108,6 +115,11 @@ pub(crate) enum Reply {
         endpoint: String,
     },
     Snapshot {
+        snapshot: Snapshot,
+    },
+    Resumed {
+        ticket: String,
+        endpoint: String,
         snapshot: Snapshot,
     },
     Declined,
@@ -220,17 +232,20 @@ pub(crate) async fn remote_native_observer_setup(
     let window = webview.window();
     let action = match action {
         Action::Available => return Ok(Reply::Available),
+        Action::Resume => {
+            let (ticket, endpoint, snapshot) = owner_service.resume(&caller, &binding).await?;
+            return Ok(Reply::Resumed {
+                ticket,
+                endpoint,
+                snapshot,
+            });
+        }
         Action::Current { ticket } => {
-            return run_owner(
-                &owner_service,
-                &ticket,
-                &caller,
-                &binding,
-                app,
-                &window,
-                Operation::Current,
-            )
-            .await
+            let owner = owner_service.get_for_retirement(&ticket, &caller, &binding)?;
+            return owner
+                .current()
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::Create { ticket, minutes } if matches!(minutes, 1 | 5 | 10) => {
             return run_owner(
@@ -242,7 +257,7 @@ pub(crate) async fn remote_native_observer_setup(
                 &window,
                 Operation::Create(minutes * 60),
             )
-            .await
+            .await;
         }
         Action::Cancel { ticket, invite_id } => {
             return run_owner(
@@ -254,7 +269,7 @@ pub(crate) async fn remote_native_observer_setup(
                 &window,
                 Operation::Cancel(invite_id),
             )
-            .await
+            .await;
         }
         Action::Reject { ticket, target } => {
             return run_owner(
@@ -266,12 +281,13 @@ pub(crate) async fn remote_native_observer_setup(
                 &window,
                 Operation::Reject(target),
             )
-            .await
+            .await;
         }
         Action::Approve {
             ticket,
             target,
             scope_choice_id: None,
+            share_ordinary,
         } => {
             return run_owner(
                 &owner_service,
@@ -280,9 +296,9 @@ pub(crate) async fn remote_native_observer_setup(
                 &binding,
                 app,
                 &window,
-                Operation::Approve(target),
+                Operation::Approve(target, share_ordinary),
             )
-            .await
+            .await;
         }
         Action::StartSharing {
             ticket,
@@ -328,6 +344,13 @@ pub(crate) async fn remote_native_observer_setup(
                 .await
                 .map(|snapshot| Reply::Snapshot { snapshot });
         }
+        Action::StartOrdinaryCatalogueRead { ticket, target } => {
+            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            return owner
+                .start_ordinary_catalogue_read(target, app, &window)
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
+        }
         Action::StartManagement { ticket, target } => {
             let owner = owner_service.get(&ticket, &caller, &binding)?;
             return owner
@@ -336,23 +359,18 @@ pub(crate) async fn remote_native_observer_setup(
                 .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::StopSharing { ticket } => {
-            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            let owner = owner_service.get_for_retirement(&ticket, &caller, &binding)?;
             return owner
                 .stop_sharing()
                 .await
                 .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::Revoke { ticket, target } => {
-            return run_owner(
-                &owner_service,
-                &ticket,
-                &caller,
-                &binding,
-                app,
-                &window,
-                Operation::Revoke(target),
-            )
-            .await
+            let owner = owner_service.get_for_retirement(&ticket, &caller, &binding)?;
+            return owner
+                .revoke_existing(target, app, &window)
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
         }
         action @ (Action::Verify { .. }
         | Action::PublicRegistration { .. }

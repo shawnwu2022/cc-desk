@@ -100,7 +100,7 @@ final class NativeDesktopBackend implements DesktopBackend {
         if (!closed.get()) attempt.callback.state(State.UNAVAILABLE);
     }
 
-    void restore(List<Desktop> candidates, IdentityProvider keys) {
+    void restore(List<Desktop> candidates, IdentityProvider keys, Runnable completed) {
         if (closed.get()) return;
         executor.execute(() -> {
             for (Desktop desktop : candidates) {
@@ -124,6 +124,9 @@ final class NativeDesktopBackend implements DesktopBackend {
                 }
             }
             restoreInterrupted(keys);
+            activity.runOnUiThread(() -> {
+                if (!closed.get() && !activity.isDestroyed()) completed.run();
+            });
         });
     }
 

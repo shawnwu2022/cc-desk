@@ -18,7 +18,7 @@ it('AndroidPairing_SettingsAndNavigationDoNotStartConnections_002', () => {
   const settings = main.slice(main.indexOf('private void editDesktopAlias('), main.indexOf('private void manualPairing('))
   expect(settings).toContain('store.renameAlias(desktop, input.getText().toString())')
   expect(settings).not.toMatch(/loadShares\(|redeemInvite\(|chooseShare\(/)
-  expect(main).toContain('home.action(card, "设备设置", false, () -> editDesktopAlias(row, name))')
+  expect(main).toContain('home.action(card, "改别名", false, () -> editDesktopAlias(row, name))')
   expect(home.indexOf('root.addView(scroll,')).toBeLessThan(home.indexOf('root.addView(bottomNavigation)'))
 })
 

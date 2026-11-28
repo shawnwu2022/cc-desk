@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.8]
+
+Remote Connections
+
+- Pair by QR or code. The QR camera preview preserves proportions. Reopen the app to see verified paired computers even offline, and set local aliases on either side.
+- Pair and share unarchived sessions in one desktop approval, or pair without sharing. The ordinary list includes eligible open and closed sessions across local projects without choosing a project, CLI or session.
+- A connection interruption does not restore revoked access. Stop immediately withdraws local sharing; an interrupted relay cleanup can be retried without reopening access.
+
+Scope
+
+- Session management and terminal control still require separate, device-specific authorization. The ordinary catalogue is read-only. No remote permanent deletion.
+- Test channel only. Use the Windows installer and signed Android APK from this same release. Physical Android enrollment and in-place upgrade have not been validated in the available environment. Production relay and Stable are unchanged.
+
 ## [0.28.0-rc.7]
 
 Added

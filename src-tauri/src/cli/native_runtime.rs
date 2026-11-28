@@ -711,6 +711,49 @@ impl NativeRuntime {
         mode: cc_desk_remote_security::session_catalogue::ListMode,
         current: impl Fn() -> Result<(), SafeError>,
     ) -> Result<Vec<cc_desk_remote_security::session_catalogue::DisplayRow>, SafeError> {
+        let rows = self.read_owner_catalogue_rows(caller, retained, epoch, &current)?;
+        let scope = std::collections::BTreeSet::from([retained.key()]);
+        let projection = cc_desk_remote_security::session_catalogue::list(mode, &scope, &rows)
+            .map_err(|_| error("REMOTE_CATALOGUE_SOURCE_CHANGED"))?;
+        current()?;
+        Ok(projection)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn read_owner_ordinary_catalogue(
+        &self,
+        caller: &CallerIdentity,
+        portfolio: &ManagementPortfolio,
+        epoch: super::types::WireU64,
+        current: impl Fn() -> Result<(), SafeError>,
+    ) -> Result<Vec<cc_desk_remote_security::session_catalogue::DisplayRow>, SafeError> {
+        let check = || {
+            current()?;
+            self.check_owner_management_portfolio(caller, portfolio)
+        };
+        check()?;
+        let mut snapshot = cc_desk_remote_security::session_catalogue::OrdinaryPortfolio::default();
+        for retained in &portfolio.sources {
+            let rows = self.read_owner_catalogue_rows(caller, retained, epoch, &check)?;
+            snapshot
+                .push(retained.key(), rows)
+                .map_err(|_| error("REMOTE_CATALOGUE_READ_BUDGET"))?;
+        }
+        let result = snapshot
+            .finish()
+            .map_err(|_| error("REMOTE_CATALOGUE_READ_BUDGET"))?;
+        check()?;
+        Ok(result)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn read_owner_catalogue_rows(
+        &self,
+        caller: &CallerIdentity,
+        retained: &super::native_projection::catalogue_history_source::RetainedHistory,
+        epoch: super::types::WireU64,
+        current: impl Fn() -> Result<(), SafeError>,
+    ) -> Result<Vec<cc_desk_remote_security::session_catalogue::SourceRow>, SafeError> {
         self.binding()?.check_admitted(caller)?;
         let mut rows = self
             .projections
@@ -748,11 +791,8 @@ impl NativeRuntime {
             ),
             _ => return Err(error("REMOTE_CATALOGUE_SOURCE_UNAVAILABLE")),
         }
-        let scope = std::collections::BTreeSet::from([retained.key()]);
-        let projection = cc_desk_remote_security::session_catalogue::list(mode, &scope, &rows)
-            .map_err(|_| error("REMOTE_CATALOGUE_SOURCE_CHANGED"))?;
         current()?;
-        Ok(projection)
+        Ok(rows)
     }
 
     pub(crate) async fn projection_read<T: Runtime>(

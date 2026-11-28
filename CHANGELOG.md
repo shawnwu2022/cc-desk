@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.8] - 2026-11-29
+
+### Fixed
+
+- Restore verified Android pairing records and read-only session lists without requiring a project, CLI, or session picker.
+- Keep ordinary sharing and reconnection bound to the device and original consent; stop does not re-enable sharing after a failed relay cleanup.
+- Preserve the camera preview aspect ratio when scanning pairing QR codes.
+
+### Improved
+
+- Share open and closed unarchived sessions with one pairing approval, or pair without sharing.
+- Set local aliases for paired phones and computers; keep the existing separately approved management and terminal-control paths.
+
+
 ## [0.28.0-rc.7] - 2026-11-27
 
 ### Added

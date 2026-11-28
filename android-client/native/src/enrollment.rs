@@ -153,7 +153,22 @@ struct Host {
     client_key_epoch: String,
     policy_epoch: String,
     issuer_epoch: String,
+    #[serde(deserialize_with = "host_expiry_decimal")]
     expires_unix_ms: String,
+}
+
+fn host_expiry_decimal<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Encoding {
+        Integer(u64),
+        Decimal(String),
+    }
+    // 只兼容时间字段的表示；原文签名、身份和有效期校验保持不变。
+    Ok(match Encoding::deserialize(d)? {
+        Encoding::Integer(value) => value.to_string(),
+        Encoding::Decimal(value) => value,
+    })
 }
 
 fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -640,4 +655,46 @@ pub(crate) fn test_pinned_catalogue_membership(
             expires_unix_ms: 100,
         },
     })
+}
+
+#[cfg(test)]
+mod host_expiry_tests {
+    use super::*;
+
+    fn check(expiry: serde_json::Value) -> Result<u64, InvalidEnrollment> {
+        let body = serde_json::json!({
+            "version": 1, "role": "Observer", "relayOrigin": "wss://relay.invalid/",
+            "inviteId": "fixture", "requestId": "fixture", "tunnel": "fixture",
+            "endpointBinding": "fixture", "phoneId": "fixture",
+            "phoneRelayPublicKeySec1": "fixture", "phoneEndpointSpki": "fixture",
+            "phoneGrantSpki": "fixture", "hostEndpointSpki": "fixture",
+            "issuerSpki": "fixture", "principal": "fixture",
+            "hostKeyEpoch": "1", "clientKeyEpoch": "1", "policyEpoch": "1", "issuerEpoch": "1",
+            "expiresUnixMs": expiry
+        });
+        let host: Host = serde_json::from_value(body).map_err(|_| InvalidEnrollment)?;
+        nonzero_decimal(&host.expires_unix_ms)
+    }
+
+    #[test]
+    fn host_expiry_accepts_desktop_integer_and_legacy_decimal_encoding() {
+        assert_eq!(
+            check(serde_json::json!(1700000000123u64)).ok(),
+            Some(1700000000123)
+        );
+        assert_eq!(
+            check(serde_json::json!("1700000000123")).ok(),
+            Some(1700000000123)
+        );
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.0),
+            serde_json::json!("01"),
+            serde_json::json!("+1"),
+            serde_json::json!(true),
+        ] {
+            assert!(check(bad).is_err());
+        }
+    }
 }

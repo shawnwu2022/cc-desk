@@ -323,6 +323,7 @@ struct Frozen {
     scope: Option<SessionScope>,
     public: [u8; 91],
     epochs: HostEpochs,
+    share_ordinary: bool,
 }
 pub(crate) struct ObserverApproval {
     machine: Arc<ApprovalMachine<Frozen>>,
@@ -333,6 +334,7 @@ pub(crate) struct SignedObserverReceipt {
     pub(crate) request_id: [u8; 16],
     pub(crate) tunnel: [u8; 16],
     pub(crate) endpoint_binding: [u8; 32],
+    pub(crate) share_ordinary: bool,
     initial_scope: Option<SessionScope>,
     owner: Arc<ApprovalLease>,
     end: Instant,
@@ -365,8 +367,12 @@ impl ObserverApproval {
         admission: Option<&NativeRunAdmission>,
         public: [u8; 91],
         epochs: HostEpochs,
+        share_ordinary: bool,
     ) -> Result<Self> {
         let scope = exact_scope(admission)?;
+        if share_ordinary && scope.is_some() {
+            return Err(Error::Authority);
+        }
         if let Some(scope) = &scope {
             encode_scope(scope).map_err(|_| Error::Authority)?;
         }
@@ -396,7 +402,13 @@ impl ObserverApproval {
                     scope.session, scope.run, scope.generation
                 )
             })
-            .unwrap_or_else(|| "No session is shared yet.".into());
+            .unwrap_or_else(|| {
+                if share_ordinary {
+                    "Share the unarchived session list from visible local projects until you stop sharing or CC Desk closes. This does not include archived sessions, changes, or terminal input.".into()
+                } else {
+                    "No session is shared yet.".into()
+                }
+            });
         let text = format!("Approve this Android device for viewing only?\n\nDevice: {}\nEndpoint: {}\n{}\nRelay: {}", hex(&candidate.relay.phone_id), hex(&candidate.relay.endpoint_binding), scope_text, candidate.origin.as_str());
         DIALOG_ACTIVE
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -410,6 +422,7 @@ impl ObserverApproval {
                     scope,
                     public,
                     epochs,
+                    share_ordinary,
                 },
                 text,
                 "Approve view-only Android device",
@@ -495,6 +508,7 @@ impl ObserverApproval {
             request_id: auth.request_id,
             tunnel: candidate.invite.tunnel,
             endpoint_binding: auth.endpoint_binding,
+            share_ordinary: frozen.share_ordinary,
             initial_scope: frozen.scope,
             owner: self.machine.lease.clone(),
             end,

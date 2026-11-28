@@ -15,7 +15,7 @@ export interface PendingPairing extends PairingIdentity {
 export interface ApprovedDevice extends PairingIdentity {
   readonly tunnel: string
   /** Only the original live owner may report an active share. */
-  readonly sharing: 'none' | 'offered' | 'active' | 'controlling' | 'unknown'
+  readonly sharing: 'none' | 'offered' | 'active' | 'controlling' | 'unknown' | 'reconnecting'
   readonly revocationPending?: boolean
 }
 export interface PairingScopeChoice {
@@ -35,6 +35,8 @@ export interface PairingSnapshot {
   readonly pending: readonly PendingPairing[]
   readonly scopeChoices: readonly PairingScopeChoice[]
   readonly devices: readonly ApprovedDevice[]
+  readonly ordinaryShareUnavailable?: boolean
+  readonly setupExpired?: boolean
 }
 
 /** Only an authenticated native Host bridge may provide this handle. All
@@ -46,9 +48,10 @@ export interface VerifiedPairing {
   current(): Promise<PairingSnapshot>
   create(minutes: InviteMinutes): Promise<PairingSnapshot>
   cancel(inviteId: string): Promise<PairingSnapshot>
-  approve(request: PendingPairing, scopeChoiceId: string | null): Promise<PairingSnapshot>
+  approve(request: PendingPairing, scopeChoiceId: string | null, shareOrdinary?: boolean): Promise<PairingSnapshot>
   reject(request: PendingPairing): Promise<PairingSnapshot>
   share?(device: ApprovedDevice, targets: readonly ShareTarget[]): Promise<PairingSnapshot>
+  startOrdinaryCatalogueRead?(device: ApprovedDevice): Promise<PairingSnapshot>
   startManagement?(device: ApprovedDevice): Promise<PairingSnapshot>
   shareCatalogue?(device: ApprovedDevice, scope: import('@/types/nativeProjection').ScopeTarget, mode?: 'archived'): Promise<PairingSnapshot>
   stopSharing?(): Promise<PairingSnapshot>
