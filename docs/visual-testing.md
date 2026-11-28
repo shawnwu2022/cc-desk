@@ -787,3 +787,15 @@ not installed Windows WebView2 or real CLI certification.
 ## RC4 Remote Connections navigation baseline review
 
 All 13 candidate PNGs from [run 45574543959](https://github.com/shawnwu2022/cc-desk/actions/runs/45574543959) were reviewed against the committed baselines. Their SHA-256 digests and dimensions match the capture inventory. Exact pixel comparisons found 132 to 230 changed pixels per image, all inside the left navigation area for the new Remote Connections icon. The original run passed 242 cases and failed the 13 old screenshot comparisons. Only the reviewed PNGs are refreshed: no screenshot masks or tolerances change. Passing a new ordinary comparison is still required.
+
+## RC7 Remote Connections in Settings
+
+The owner authorized the 13 reviewed baseline replacements for removing Remote
+Connections from the sidebar and adding it to Settings. The committed bytes
+match the actual PNGs from [PR122 visual run 46047539621](https://github.com/shawnwu2022/cc-desk/actions/runs/46047539621)
+(artifact 15222484098). The approval manifest records the original source,
+tested merge, ZIP and image hashes, and the inspected pixel regions. No masks,
+comparison tolerance, fixture behavior or case inventory changed. The original
+242/255 run remains failed; a fresh zero-difference, no-update run is required
+before merge. This is Linux Chromium screenshot evidence, not native WebView
+or handset acceptance.
