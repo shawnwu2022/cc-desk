@@ -584,13 +584,7 @@ impl CatalogueOwner {
         }
         // Clear this exact digest, including an uncertain publish. It cannot
         // clear another grant; the relay also expires it with a bounded TTL.
-        let cleaned = self
-            .owner
-            .share_wire(ShareCommand::Clear {
-                tunnel: self.device.tunnel,
-                catalog_digest: offer.digest,
-            })
-            .await;
+        let cleaned = self.clear_published_offer(&offer).await;
         if matches!(cleaned, Ok(ShareResponse::Cleared {ref tunnel,ref catalog_digest})
             if tunnel == &hex(&self.device.tunnel) && catalog_digest == &hex(&offer.digest))
         {
@@ -599,6 +593,38 @@ impl CatalogueOwner {
         } else {
             Err(uncertain())
         }
+    }
+
+    async fn clear_published_offer(
+        &self,
+        offer: &SignedCatalogueOffer,
+    ) -> Result<ShareResponse, SafeError> {
+        // This exact digest was admitted before publication. Cleanup cannot
+        // depend on the setup deadline that may have ended the offer.
+        if offer.grant != self.grant_id {
+            return Err(locked());
+        }
+        self.owner.check_document()?;
+        let setup = self
+            .owner
+            .profile
+            .operation(
+                &self.owner.lifetime,
+                Instant::now() + Duration::from_secs(8),
+            )
+            .map_err(|_| locked())?;
+        let reply = control::share_request(
+            setup,
+            self.owner.address,
+            ShareCommand::Clear {
+                tunnel: self.device.tunnel,
+                catalog_digest: offer.digest,
+            },
+        )
+        .await
+        .map_err(|_| uncertain())?;
+        self.owner.check_document()?;
+        Ok(reply)
     }
 
     async fn serve_selection(

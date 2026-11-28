@@ -208,7 +208,14 @@ fn uncertain() -> SafeError {
 }
 impl Owner {
     fn check(&self) -> Result<(), SafeError> {
-        if Instant::now() >= self.deadline || self.lifetime.is_revoked() {
+        if Instant::now() >= self.deadline {
+            return Err(locked());
+        }
+        self.check_document()
+    }
+
+    fn check_document(&self) -> Result<(), SafeError> {
+        if self.lifetime.is_revoked() {
             return Err(locked());
         }
         self.document
