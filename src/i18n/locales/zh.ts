@@ -19,6 +19,7 @@ export default {
   remotePairingShareNoRuns: "先打开一个 CC Desk 会话，再回到这里分享。",
   remotePairingShareActive: "手机正在查看快照",
   remotePairingShareOffered: "请在手机上打开 CC Desk，选择会话查看。",
+  remotePairingShareReconnecting: "中转已断开，将自动重试。你也可以现在停止共享。",
   remotePairingShareUnknown: "无法确认共享状态，请先停止共享再重试。",
   remoteCatalogueTitle: "会话列表",
   remoteCatalogueHint: "仅共享一个项目的只读会话列表，不开放终端访问。",

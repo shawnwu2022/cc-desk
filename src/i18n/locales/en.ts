@@ -19,6 +19,7 @@ export default {
   remotePairingShareNoRuns: "Open a CC Desk session, then come back here.",
   remotePairingShareActive: "Viewing a snapshot on the phone",
   remotePairingShareOffered: "Open CC Desk on your phone and select a session.",
+  remotePairingShareReconnecting: "Relay disconnected. Sharing will retry automatically; you can stop it now.",
   remotePairingShareUnknown: "Could not confirm the share. Stop sharing before trying again.",
   remoteCatalogueTitle: "Session list",
   remoteCatalogueHint: "Shares a read-only list for one project. It does not share terminal access.",

@@ -184,7 +184,7 @@ async function readWaitingInvitation() {
   const prior = snapshot.value
   const id = prior?.invite?.inviteId
   const pendingInvite = !!id && inviteLive.value && !prior?.pending.some(request => request.inviteId === id)
-  const offeredShare = !!prior?.devices.some(device => device.sharing === 'offered')
+  const offeredShare = !!prior?.devices.some(device => device.sharing === 'offered' || device.sharing === 'reconnecting')
   if (disposed || busy.value || invitationRead || !handle || !prior
     || (!pendingInvite && !offeredShare) || now.value - lastInvitationRead < 3000) return
   lastInvitationRead = now.value
@@ -203,7 +203,7 @@ async function readWaitingInvitation() {
 
 onMounted(() => {
   ticker = setInterval(() => {
-    if (!invite.value && !snapshot.value?.devices.some(device => device.sharing === 'offered')) return
+    if (!invite.value && !snapshot.value?.devices.some(device => device.sharing === 'offered' || device.sharing === 'reconnecting')) return
     now.value = Date.now()
     void readWaitingInvitation()
   }, 1000)
@@ -496,7 +496,7 @@ function cancel() {
             </form>
             <AppButton v-else data-device-alias-edit @click="editDeviceAlias(device)">{{ t('remoteDeviceAliasEdit') }}</AppButton>
             <p v-if="device.revocationPending" role="status">{{ t('remotePairingRevokePending') }}</p>
-            <p v-else>{{ t(device.sharing === 'controlling' ? 'remotePairingControlActive' : device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : 'remotePairingNoScope') }}</p>
+            <p v-else>{{ t(device.sharing === 'controlling' ? 'remotePairingControlActive' : device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : device.sharing === 'reconnecting' ? 'remotePairingShareReconnecting' : 'remotePairingNoScope') }}</p>
             <details><summary>{{ t('remotePairingDetails') }}</summary><dl>
               <dt>{{ t('remotePairingPhoneId') }}</dt><dd>{{ device.phoneId }}</dd>
               <dt>{{ t('remotePairingRelayKey') }}</dt><dd><code>{{ device.phoneRelayPublicKeySec1 }}</code></dd>

@@ -17,7 +17,8 @@ use cc_desk_remote_security::{
     P256Spki, Role,
 };
 use cc_desk_remote_transport::wss::{
-    HostShareCommand as ShareCommand, HostShareResponse as ShareResponse, ShareSelectionKey,
+    ConnectError, EnrollmentError, HostShareCommand as ShareCommand,
+    HostShareResponse as ShareResponse, ShareSelectionKey,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use tauri::{Emitter, EventTarget};
@@ -56,6 +57,48 @@ const MANAGEMENT_WINDOW: Duration = Duration::from_secs(300);
 const MIN_OFFER_BUDGET: Duration = Duration::from_secs(10);
 const OFFER_TTL: Duration = Duration::from_secs(60);
 const CONTROL_BUDGET: Duration = Duration::from_secs(8);
+const CLEAR_RETRY: Duration = Duration::from_secs(300);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExactClear {
+    Confirmed,
+    Retryable,
+    Rejected,
+}
+
+async fn wait_for_exact_clear<F, Fut>(
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+    may_retry: bool,
+    retry_after: Duration,
+    mut clear: F,
+    mut waiting: impl FnMut(),
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ExactClear>,
+{
+    loop {
+        match clear().await {
+            ExactClear::Confirmed => return true,
+            ExactClear::Rejected => return false,
+            ExactClear::Retryable
+                if !may_retry || *stop.borrow() || stop.has_changed().is_err() =>
+            {
+                return false
+            }
+            ExactClear::Retryable => {}
+        }
+        waiting();
+        tokio::select! {
+            biased;
+            _ = stop.changed() => return false,
+            _ = tokio::time::sleep(retry_after) => {}
+        }
+        if *stop.borrow() || stop.has_changed().is_err() {
+            return false;
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum CatalogueWindow {
@@ -460,10 +503,12 @@ impl Owner {
         let task = tokio::spawn(async move {
             let result = if matches!(owner.purpose, RoutePurpose::ReadAll | RoutePurpose::Manage) {
                 owner
-                    .serve_catalogue_window(offer, cancel, &retirement)
+                    .serve_catalogue_window(offer, cancel, &retirement, &status)
                     .await
             } else {
-                owner.publish_and_serve(offer, cancel, &retirement).await
+                owner
+                    .publish_and_serve(offer, cancel, &retirement, &status)
+                    .await
             };
             status.store(if result.is_ok() { 0 } else { 3 }, Ordering::Release);
             result
@@ -508,6 +553,7 @@ impl CatalogueOwner {
         mut offer: SignedCatalogueOffer,
         mut stop: tokio::sync::watch::Receiver<bool>,
         retired: &AtomicBool,
+        status: &AtomicU8,
     ) -> Result<(), SafeError> {
         let stopped = |stop: &tokio::sync::watch::Receiver<bool>| {
             *stop.borrow() || stop.has_changed().is_err()
@@ -519,7 +565,7 @@ impl CatalogueOwner {
             }
             let previous_retired = AtomicBool::new(false);
             let result = self
-                .publish_and_serve(offer, stop.clone(), &previous_retired)
+                .publish_and_serve(offer, stop.clone(), &previous_retired, status)
                 .await;
             let closed = previous_retired.load(Ordering::Acquire);
             if !closed {
@@ -567,6 +613,7 @@ impl CatalogueOwner {
         offer: SignedCatalogueOffer,
         mut stop: tokio::sync::watch::Receiver<bool>,
         retired: &AtomicBool,
+        status: &AtomicU8,
     ) -> Result<(), SafeError> {
         let mut attempted_publish = false;
         let endpoint_retired = AtomicBool::new(true);
@@ -596,6 +643,7 @@ impl CatalogueOwner {
             {
                 return Err(uncertain());
             }
+            status.store(1, Ordering::Release);
             loop {
                 if *stop.borrow()
                     || !self.window.is_open(Instant::now())
@@ -646,15 +694,23 @@ impl CatalogueOwner {
         }
         // Clear this exact digest, including an uncertain publish. It cannot
         // clear another grant; the relay also expires it with a bounded TTL.
-        let cleaned = self.clear_published_offer(&offer).await;
-        if matches!(cleaned, Ok(ShareResponse::Cleared {ref tunnel,ref catalog_digest})
-            if tunnel == &hex(&self.device.tunnel) && catalog_digest == &hex(&offer.digest))
-        {
-            retired.store(endpoint_retired.load(Ordering::Acquire), Ordering::Release);
-            result
-        } else {
-            Err(uncertain())
+        let endpoint_closed = endpoint_retired.load(Ordering::Acquire);
+        let may_retry = matches!(self.purpose, RoutePurpose::ReadAll)
+            && endpoint_closed
+            && !self.lifetime.is_revoked();
+        let cleaned = wait_for_exact_clear(
+            &mut stop,
+            may_retry,
+            CLEAR_RETRY,
+            || self.clear_published_offer(&offer),
+            || status.store(5, Ordering::Release),
+        )
+        .await;
+        if !cleaned || !endpoint_closed {
+            return Err(uncertain());
         }
+        retired.store(true, Ordering::Release);
+        result
     }
 
     async fn catalogue_wire(
@@ -694,24 +750,20 @@ impl CatalogueOwner {
         Ok(reply)
     }
 
-    async fn clear_published_offer(
-        &self,
-        offer: &SignedCatalogueOffer,
-    ) -> Result<ShareResponse, SafeError> {
-        // This exact digest was admitted before publication. Cleanup cannot
-        // depend on the setup deadline that may have ended the offer.
-        if offer.grant != self.grant_id {
-            return Err(locked());
+    async fn clear_published_offer(&self, offer: &SignedCatalogueOffer) -> ExactClear {
+        use control::ControlFailure;
+        // Only the same authenticated tunnel/digest can be retired. A lost
+        // reply is not a retirement, even after the relay's nominal TTL.
+        if offer.grant != self.grant_id || self.owner.check_document().is_err() {
+            return ExactClear::Rejected;
         }
-        self.owner.check_document()?;
-        let setup = self
+        let Ok(setup) = self
             .owner
             .profile
-            .operation(
-                &self.owner.lifetime,
-                Instant::now() + Duration::from_secs(8),
-            )
-            .map_err(|_| locked())?;
+            .operation(&self.owner.lifetime, Instant::now() + CONTROL_BUDGET)
+        else {
+            return ExactClear::Rejected;
+        };
         let reply = control::share_request(
             setup,
             self.owner.address,
@@ -720,10 +772,23 @@ impl CatalogueOwner {
                 catalog_digest: offer.digest,
             },
         )
-        .await
-        .map_err(|_| uncertain())?;
-        self.owner.check_document()?;
-        Ok(reply)
+        .await;
+        if self.owner.check_document().is_err() {
+            return ExactClear::Rejected;
+        }
+        match reply {
+            Ok(ShareResponse::Cleared {
+                tunnel,
+                catalog_digest,
+            }) if tunnel == hex(&self.device.tunnel) && catalog_digest == hex(&offer.digest) => {
+                ExactClear::Confirmed
+            }
+            Err(ControlFailure::Relay(
+                EnrollmentError::Connection(ConnectError::Deadline | ConnectError::Transport)
+                | EnrollmentError::OutcomeUnknown,
+            )) => ExactClear::Retryable,
+            _ => ExactClear::Rejected,
+        }
     }
 
     async fn serve_selection(
@@ -1181,6 +1246,75 @@ impl CatalogueOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn clear_recovery_waits_for_exact_confirmation_and_obeys_stop() {
+        use std::{cell::Cell, future::ready};
+        use tokio::sync::watch;
+        let (stop_tx, mut stop) = watch::channel(false);
+        let attempts = Cell::new(0);
+        let waiting = Cell::new(0);
+        assert!(
+            wait_for_exact_clear(
+                &mut stop,
+                true,
+                Duration::from_millis(1),
+                || {
+                    let attempt = attempts.get() + 1;
+                    attempts.set(attempt);
+                    ready(if attempt == 3 {
+                        ExactClear::Confirmed
+                    } else {
+                        ExactClear::Retryable
+                    })
+                },
+                || waiting.set(waiting.get() + 1)
+            )
+            .await
+        );
+        assert_eq!((attempts.get(), waiting.get()), (3, 2));
+
+        attempts.set(0);
+        assert!(
+            !wait_for_exact_clear(
+                &mut stop,
+                true,
+                Duration::from_secs(300),
+                || {
+                    attempts.set(attempts.get() + 1);
+                    ready(ExactClear::Retryable)
+                },
+                || {
+                    stop_tx.send_replace(true);
+                }
+            )
+            .await
+        );
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn clear_recovery_never_retries_a_rejection_or_unjoined_endpoint() {
+        use std::{cell::Cell, future::ready};
+        for (can_retry, outcome) in [(true, ExactClear::Rejected), (false, ExactClear::Retryable)] {
+            let (_stop_tx, mut stop) = tokio::sync::watch::channel(false);
+            let attempts = Cell::new(0);
+            assert!(
+                !wait_for_exact_clear(
+                    &mut stop,
+                    can_retry,
+                    Duration::ZERO,
+                    || {
+                        attempts.set(attempts.get() + 1);
+                        ready(outcome)
+                    },
+                    || panic!("must not wait or request a new offer")
+                )
+                .await
+            );
+            assert_eq!(attempts.get(), 1);
+        }
+    }
 
     #[test]
     fn ordinary_sharing_outlives_setup_but_never_its_per_offer_budget() {

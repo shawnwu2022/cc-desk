@@ -124,6 +124,7 @@ impl Device {
                 Some(2) => "active",
                 Some(3) => "unknown",
                 Some(4) => "controlling",
+                Some(5) => "reconnecting",
                 _ => "none",
             },
             revocation_pending: d.state == DeviceState::Revoked,
@@ -468,7 +469,13 @@ impl Owner {
 
     pub(crate) async fn current(&self) -> Result<Snapshot, SafeError> {
         self.check_document()?;
-        if Instant::now() < self.deadline {
+        let reconnecting = self
+            .sharing
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|task| task.phase() == 5);
+        if Instant::now() < self.deadline && !reconnecting {
             let mut cache = self
                 .state
                 .try_lock()

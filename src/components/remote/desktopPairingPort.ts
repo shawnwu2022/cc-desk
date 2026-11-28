@@ -15,7 +15,7 @@ export interface PendingPairing extends PairingIdentity {
 export interface ApprovedDevice extends PairingIdentity {
   readonly tunnel: string
   /** Only the original live owner may report an active share. */
-  readonly sharing: 'none' | 'offered' | 'active' | 'controlling' | 'unknown'
+  readonly sharing: 'none' | 'offered' | 'active' | 'controlling' | 'unknown' | 'reconnecting'
   readonly revocationPending?: boolean
 }
 export interface PairingScopeChoice {

@@ -173,7 +173,7 @@ it('PairingInvite_ExplicitlyPairsAndSharesOrdinaryListInOneAction', async () => 
 it('Expired desktop setup reopens with local sharing controls and cannot start a new grant', async () => {
   const device = { phoneId: 'fixture-phone', phoneRelayPublicKeySec1: 'relay-key',
     phoneEndpointSpki: 'endpoint-key', endpointBinding: 'binding', tunnel: 'fixture-tunnel',
-    sharing: 'offered' as const }
+    sharing: 'reconnecting' as const }
   const standby = { ...device, tunnel: 'fixture-other', sharing: 'none' as const }
   const snapshot: PairingSnapshot = {
     invite: null, pending: [], scopeChoices: [], devices: [device, standby], setupExpired: true,
@@ -188,6 +188,7 @@ it('Expired desktop setup reopens with local sharing controls and cannot start a
   })
   await flushPromises()
   expect(view.text()).toContain(en.remotePairingSetupExpired)
+  expect(view.text()).toContain(en.remotePairingShareReconnecting)
   expect(view.get('input').attributes('disabled')).toBeDefined()
   expect(view.find('[data-start-ordinary-catalogue]').exists()).toBe(false)
   expect(view.findAll('button').some(button => button.text() === en.remotePairingCreate)).toBe(false)
