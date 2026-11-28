@@ -100,7 +100,7 @@ function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
     current: () => request('current'),
     create: minutes => request('create', { minutes }),
     cancel: inviteId => request('cancel', { inviteId }),
-    approve: (target, scopeChoiceId) => request('approve', { target, scopeChoiceId }),
+    approve: (target, scopeChoiceId, shareOrdinary) => request('approve', { target, scopeChoiceId, ...(shareOrdinary ? { shareOrdinary: true } : {}) }),
     reject: target => request('reject', { target }),
     revoke: device => request('revoke', { target: target(device) }),
     share: (device, runs) => request('startSharing', { target: target(device), runs }),
@@ -350,11 +350,12 @@ function create() {
   const value = Number(minutes.value)
   if (snapshot.value && !inviteLive.value && (value === 1 || value === 5 || value === 10)) void perform(handle => handle.create(value))
 }
-function decide(request: PendingPairing, approve: boolean) {
+function decide(request: PendingPairing, approve: boolean, shareOrdinary = false) {
   const active = invite.value
   if (active && active.inviteId === request.inviteId && active.expiresUnixMs > Date.now()) {
     if (!approve) { void perform(handle => handle.reject(request)); return }
     const scope = selectedScope.value
+    if (shareOrdinary) { void perform(handle => handle.approve(request, null, true), true); return }
     if (scopeValid.value) void perform(handle => handle.approve(request, scope || null))
   }
 }
@@ -439,7 +440,10 @@ function cancel() {
               <dt>{{ t('remotePairingBinding') }}</dt><dd><code>{{ request.endpointBinding }}</code></dd>
             </dl></details>
             <div class="actions">
-              <AppButton variant="primary" :disabled="busy || !inviteLive || !scopeValid || request.inviteId !== invite?.inviteId"
+              <AppButton v-if="verified?.startOrdinaryCatalogueRead" variant="primary" data-pair-and-share
+                :disabled="busy || !inviteLive || request.inviteId !== invite?.inviteId"
+                @click="decide(request, true, true)">{{ t('remotePairAndShareOrdinary') }}</AppButton>
+              <AppButton v-if="showAdvancedSharing" :disabled="busy || !inviteLive || !scopeValid || request.inviteId !== invite?.inviteId"
                 @click="decide(request, true)">{{ t(verified?.startOrdinaryCatalogueRead ? 'remotePairingApproveDevice' : 'remotePairingApprove') }}</AppButton>
               <AppButton :disabled="busy || !inviteLive || request.inviteId !== invite?.inviteId"
                 @click="decide(request, false)">{{ t('remotePairingReject') }}</AppButton>
@@ -448,6 +452,7 @@ function cancel() {
         </ul>
         </template>
         <h3>{{ t('remotePairingDevices') }}</h3>
+        <p v-if="snapshot.ordinaryShareUnavailable" role="status">{{ t('remotePairAndShareUnavailable') }}</p>
         <template v-if="showAdvancedSharing">
         <fieldset v-if="verified?.share && snapshot.devices.some(device => !device.revocationPending)" data-advanced-share-options>
           <legend>{{ t('remotePairingShareChoose') }}</legend>

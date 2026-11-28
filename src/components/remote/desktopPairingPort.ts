@@ -35,6 +35,7 @@ export interface PairingSnapshot {
   readonly pending: readonly PendingPairing[]
   readonly scopeChoices: readonly PairingScopeChoice[]
   readonly devices: readonly ApprovedDevice[]
+  readonly ordinaryShareUnavailable?: boolean
 }
 
 /** Only an authenticated native Host bridge may provide this handle. All
@@ -46,7 +47,7 @@ export interface VerifiedPairing {
   current(): Promise<PairingSnapshot>
   create(minutes: InviteMinutes): Promise<PairingSnapshot>
   cancel(inviteId: string): Promise<PairingSnapshot>
-  approve(request: PendingPairing, scopeChoiceId: string | null): Promise<PairingSnapshot>
+  approve(request: PendingPairing, scopeChoiceId: string | null, shareOrdinary?: boolean): Promise<PairingSnapshot>
   reject(request: PendingPairing): Promise<PairingSnapshot>
   share?(device: ApprovedDevice, targets: readonly ShareTarget[]): Promise<PairingSnapshot>
   startOrdinaryCatalogueRead?(device: ApprovedDevice): Promise<PairingSnapshot>

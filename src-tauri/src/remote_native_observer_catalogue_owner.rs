@@ -311,6 +311,102 @@ impl Owner {
         else {
             return self.snapshot(&mut cache).await;
         };
+        self.install_catalogue_task(owner).await?;
+        self.snapshot(&mut cache).await
+    }
+
+    // Only called while processing the exact newly confirmed pairing under the
+    // setup state lock. The local signed receipt carries the native dialog choice.
+    pub(super) async fn start_ordinary_after_pairing(
+        self: &Arc<Self>,
+        consent: &ObserverApproval,
+        issued: &SignedObserverReceipt,
+        window: &Window,
+    ) -> Result<(), SafeError> {
+        if !issued.share_ordinary
+            || !consent.current(issued)
+            || self
+                .sharing
+                .lock()
+                .await
+                .as_ref()
+                .is_some_and(|task| task.phase() != 0)
+        {
+            return Err(locked());
+        }
+        let (_, relay_pairs) = self.listing().await?;
+        let store = self.store.clone();
+        let request_id = issued.request_id;
+        let tunnel = issued.tunnel;
+        let binding = issued.endpoint_binding;
+        let current = self.clone();
+        let (device, portfolio) = tokio::task::spawn_blocking(move || {
+            let row = store
+                .list_locked()
+                .map_err(|_| locked())?
+                .into_iter()
+                .find(|row| {
+                    row.request_id == request_id
+                        && row.tunnel == tunnel
+                        && row.endpoint_binding == binding
+                })
+                .ok_or_else(locked)?;
+            let relay = RelayPair {
+                request_id: row.request_id,
+                tunnel: row.tunnel,
+                phone_id: row.phone_id,
+                phone_relay_public_key_sec1: row.phone_relay_public_key_sec1,
+                endpoint_binding: row.endpoint_binding,
+            };
+            if !relay_pairs
+                .iter()
+                .any(|candidate| party_matches(candidate, &relay))
+            {
+                return Err(locked());
+            }
+            if row.state == DeviceState::Pending {
+                store.reconcile_present(&relay).map_err(|_| locked())?;
+            }
+            let device = DeviceSummary {
+                state: DeviceState::Confirmed,
+                ..row
+            };
+            let check = || current.check_catalogue_device(&device, current.deadline);
+            check()?;
+            let portfolio = current
+                .runtime
+                .retain_owner_management_portfolio(&current.caller, check)?;
+            Ok::<_, SafeError>((device, portfolio))
+        })
+        .await
+        .map_err(|_| uncertain())??;
+        if !consent.current(issued) {
+            return Err(locked());
+        }
+        let pair = CataloguePair {
+            host: P256Spki::new(&self.profile.endpoint_spki())
+                .map_err(|_| locked())?
+                .endpoint_id(Role::Host),
+            client: P256Spki::new(&device.phone_endpoint_spki)
+                .map_err(|_| locked())?
+                .endpoint_id(Role::Client),
+        };
+        self.install_catalogue_task(Arc::new(CatalogueOwner {
+            owner: self.clone(),
+            desktop_window: window.clone(),
+            device,
+            pair,
+            purpose: RoutePurpose::ReadAll,
+            grant_id: uuid::Uuid::new_v4(),
+            retained: RouteSource::ReadAll(Arc::new(portfolio)),
+            end: self.deadline,
+            epoch: AtomicU64::new(0),
+            reading: tokio::sync::Mutex::new(()),
+        }))
+        .await
+    }
+
+    async fn install_catalogue_task(&self, owner: Arc<CatalogueOwner>) -> Result<(), SafeError> {
         self.stop_share(None).await?;
         let offer = owner.sign_offer().await?;
         let tunnel = owner.device.tunnel;
@@ -320,7 +416,7 @@ impl Owner {
         let status = phase.clone();
         let retirement = retired.clone();
         let task = tokio::spawn(async move {
-            let result = if matches!(purpose, RoutePurpose::ReadAll | RoutePurpose::Manage) {
+            let result = if matches!(owner.purpose, RoutePurpose::ReadAll | RoutePurpose::Manage) {
                 owner
                     .serve_catalogue_window(offer, cancel, &retirement)
                     .await
@@ -333,7 +429,7 @@ impl Owner {
         *self.sharing.lock().await = Some(super::shares_owner::Task::new(
             tunnel, phase, stop, task, retired,
         ));
-        self.snapshot(&mut cache).await
+        Ok(())
     }
 }
 

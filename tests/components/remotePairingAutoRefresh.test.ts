@@ -15,14 +15,14 @@ let view: VueWrapper | undefined
 beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }))
 afterEach(() => { view?.unmount(); view = undefined; vi.useRealTimers() })
 
-async function mountPairing(lifetime = 20000) {
+async function mountPairing(lifetime = 20000, ordinary = false) {
   const invitation = { inviteId: 'fixture-invite', expiresUnixMs: Date.now() + lifetime }
   const initial: PairingSnapshot = { invite: invitation, pending: [], scopeChoices: [], devices: [] }
   const called: PairingSnapshot = { ...initial, pending: [{ inviteId: invitation.inviteId, requestId: 'fixture-request',
     phoneId: 'fixture-phone', phoneRelayPublicKeySec1: 'relay-key', phoneEndpointSpki: 'endpoint-key', endpointBinding: 'binding' }] }
   const current = vi.fn<VerifiedPairing['current']>().mockResolvedValue(initial)
   const approve = vi.fn<VerifiedPairing['approve']>()
-  const handle: VerifiedPairing = { endpoint: 'wss://relay.test/relay', current, approve, create: vi.fn(), cancel: vi.fn(), reject: vi.fn(), revoke: vi.fn() }
+  const handle: VerifiedPairing = { endpoint: 'wss://relay.test/relay', current, approve, ...(ordinary ? { startOrdinaryCatalogueRead: vi.fn() } : {}), create: vi.fn(), cancel: vi.fn(), reject: vi.fn(), revoke: vi.fn() }
   view = mount(RemoteConnectionsView, { global: {
     plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
     provide: { [DESKTOP_PAIRING_PORT as symbol]: { verify: async () => ({ kind: 'verified', handle }) } },
@@ -150,4 +150,15 @@ it('PairingRelayAddress_ExplainsDisabledStateAndPreservesPath', async () => {
   await button.trigger('click')
   await flushPromises()
   expect(verify).toHaveBeenCalledExactlyOnceWith('wss://relay.test/relay')
+})
+
+it('PairingInvite_ExplicitlyPairsAndSharesOrdinaryListInOneAction', async () => {
+  const { current, approve, called } = await mountPairing(20000, true)
+  current.mockResolvedValueOnce(called)
+  await vi.advanceTimersByTimeAsync(3000)
+  expect(approve).not.toHaveBeenCalled()
+  approve.mockResolvedValueOnce({ ...called, invite: null, pending: [] })
+  await view!.get('[data-pair-and-share]').trigger('click')
+  await flushPromises()
+  expect(approve).toHaveBeenCalledExactlyOnceWith(called.pending[0], null, true)
 })

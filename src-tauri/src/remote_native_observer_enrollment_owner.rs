@@ -1,10 +1,11 @@
 //! Process-local desktop enrollment owner. Paired membership is separate from
-//! live sharing; this owner never starts a data route or selects an active tab.
+//! live sharing; combined consent may start an exact device's read-only catalogue.
 use super::{
     control, decode, hex, invitation_codes,
     setup::TrustedHostProfile,
     store::{RelayPair, RevokeApproval, State as DeviceState, Store},
-    ApprovalMachine, ObserverApproval, RelayCandidate, RelayInvite, VerifiedCandidate,
+    ApprovalMachine, ObserverApproval, RelayCandidate, RelayInvite, SignedObserverReceipt,
+    VerifiedCandidate,
 };
 use crate::{
     cli::{
@@ -79,6 +80,8 @@ pub(crate) struct Snapshot {
     pending: Vec<Pending>,
     devices: Vec<Device>,
     scope_choices: Vec<()>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ordinary_share_unavailable: Option<bool>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -112,7 +115,7 @@ pub(crate) enum Operation {
     Create(u16),
     Cancel(String),
     Reject(Pending),
-    Approve(Pending),
+    Approve(Pending, bool),
     Revoke(DeviceTarget),
 }
 
@@ -403,10 +406,11 @@ impl Owner {
             pending,
             devices,
             scope_choices: Vec::new(),
+            ordinary_share_unavailable: None,
         })
     }
     pub(crate) async fn execute(
-        &self,
+        self: &Arc<Self>,
         op: Operation,
         app: &AppHandle,
         window: &Window,
@@ -480,7 +484,7 @@ impl Owner {
                 }
                 cache.invite = None;
             }
-            Operation::Approve(pending) => {
+            Operation::Approve(pending, share_ordinary) => {
                 let (current, _) = self.listing().await?;
                 let Some((view, verified)) = current
                     .as_ref()
@@ -501,6 +505,7 @@ impl Owner {
                         None,
                         self.profile.endpoint_spki(),
                         self.profile.epochs(),
+                        share_ordinary,
                     )
                     .map_err(|_| locked())?,
                 );
@@ -532,7 +537,7 @@ impl Owner {
                         invite_id: issued.invite_id,
                         request_id: issued.request_id,
                         approve: true,
-                        native_approval: Some(issued.wire),
+                        native_approval: Some(issued.wire.clone()),
                     })
                     .await?;
                 if !matches!(outcome, Response::Approved { tunnel } if tunnel == hex(&issued.tunnel))
@@ -540,6 +545,16 @@ impl Owner {
                     return Err(uncertain());
                 }
                 cache.invite = None;
+                if issued.share_ordinary {
+                    let shared = self
+                        .start_ordinary_after_pairing(&consent, &issued, window)
+                        .await;
+                    let mut snapshot = self.snapshot(&mut cache).await?;
+                    if shared.is_err() {
+                        snapshot.ordinary_share_unavailable = Some(true);
+                    }
+                    return Ok(snapshot);
+                }
             }
             Operation::Revoke(target) => {
                 let (_, pairs) = self.listing().await?;

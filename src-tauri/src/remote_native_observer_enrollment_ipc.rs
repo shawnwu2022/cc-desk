@@ -65,6 +65,8 @@ enum Action {
         ticket: String,
         target: Pending,
         scope_choice_id: Option<String>,
+        #[serde(default)]
+        share_ordinary: bool,
     },
     Revoke {
         ticket: String,
@@ -276,6 +278,7 @@ pub(crate) async fn remote_native_observer_setup(
             ticket,
             target,
             scope_choice_id: None,
+            share_ordinary,
         } => {
             return run_owner(
                 &owner_service,
@@ -284,7 +287,7 @@ pub(crate) async fn remote_native_observer_setup(
                 &binding,
                 app,
                 &window,
-                Operation::Approve(target),
+                Operation::Approve(target, share_ordinary),
             )
             .await;
         }
