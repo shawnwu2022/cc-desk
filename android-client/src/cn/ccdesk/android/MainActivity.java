@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -18,12 +20,15 @@ import java.util.UUID;
 
 public final class MainActivity extends Activity {
     private static final String HOME_SESSIONS = "home.sessions";
+    private static final long ORDINARY_RETRY_MS = 5 * 60_000L;
     private LinearLayout content;
     private RemoteHomeView home;
     private SessionBrowser sessionBrowser;
     private boolean showingSessions;
     private boolean projectionForeground;
     private final java.util.Set<UUID> initialSessionLoads = new java.util.HashSet<>();
+    private final Handler sessionRetryHandler = new Handler(Looper.getMainLooper());
+    private final Runnable retryOrdinarySessions = this::retryOrdinarySessionsWhileForeground;
     private final java.util.Map<UUID, TextView> managementViewports = new java.util.HashMap<>();
     private boolean lastHomeSessions;
     private UUID lastHomeSelection;
@@ -398,6 +403,23 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void retryOrdinarySessionsWhileForeground() {
+        if (!active || !projectionForeground) return;
+        if (backend != null && controlPanel == null) {
+            try {
+                for (DesktopBackend.Desktop row : store.read()) {
+                    if (!canUseDesktop(row) || !initialSessionLoads.contains(row.localId)) continue;
+                    DesktopBackend.State state = backend.state(row);
+                    if (state == DesktopBackend.State.DISCONNECTED
+                            || state == DesktopBackend.State.UNAVAILABLE) refreshDesktop(row);
+                }
+            } catch (IOException ignored) {
+                // 不从读失败的索引推断设备或授权。
+            }
+        }
+        sessionRetryHandler.postDelayed(retryOrdinarySessions, ORDINARY_RETRY_MS);
+    }
+
     private void refreshDesktop(DesktopBackend.Desktop desktop) {
         if (canUseDesktop(desktop) && canRefresh(backend.state(desktop))) backend.loadShares(desktop, identities);
     }
@@ -700,11 +722,13 @@ public final class MainActivity extends Activity {
     @Override protected void onStart() {
         super.onStart();
         projectionForeground = true;
+        sessionRetryHandler.postDelayed(retryOrdinarySessions, ORDINARY_RETRY_MS);
         loadInitialOrdinarySessions();
     }
 
     @Override protected void onStop() {
         projectionForeground = false;
+        sessionRetryHandler.removeCallbacks(retryOrdinarySessions);
         if (controlPanel != null) leaveControl(true);
         stopManagementViews();
         super.onStop();

@@ -32,4 +32,11 @@ describe('Android paired desktop list wiring', () => {
     expect(activity).toContain('canUseDesktop(row) && backend.state(row) == DesktopBackend.State.DISCONNECTED')
     expect(activity).toContain('initialSessionLoads.add(row.localId)) refreshDesktop(row);')
   })
+  it('AndroidDesktopList_RetriesUnavailableOrdinaryCatalogueOnlyWhileForeground_005', () => {
+    expect(activity).toContain('ORDINARY_RETRY_MS = 5 * 60_000L')
+    expect(activity).toContain('sessionRetryHandler.postDelayed(retryOrdinarySessions, ORDINARY_RETRY_MS)')
+    expect(activity).toMatch(/onStop\(\) \{[^}]*sessionRetryHandler.removeCallbacks\(retryOrdinarySessions\)/)
+    expect(activity).toContain('if (!canUseDesktop(row) || !initialSessionLoads.contains(row.localId)) continue;')
+    expect(activity).toMatch(/state == DesktopBackend.State.DISCONNECTED\s*\|\| state == DesktopBackend.State.UNAVAILABLE\) refreshDesktop\(row\)/)
+  })
 })
