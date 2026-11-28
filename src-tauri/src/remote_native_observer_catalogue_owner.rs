@@ -34,6 +34,7 @@ pub(super) struct CatalogueOwner {
     retained: RouteSource,
     window: CatalogueWindow,
     lifetime: Arc<NativeRevocation>,
+    pending_clear: Arc<super::shares_owner::PendingCatalogueClear>,
     epoch: AtomicU64,
     reading: tokio::sync::Mutex<()>,
 }
@@ -59,8 +60,8 @@ const OFFER_TTL: Duration = Duration::from_secs(60);
 const CONTROL_BUDGET: Duration = Duration::from_secs(8);
 const CLEAR_RETRY: Duration = Duration::from_secs(300);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ExactClear {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExactClear {
     Confirmed,
     Retryable,
     Rejected,
@@ -72,30 +73,30 @@ async fn wait_for_exact_clear<F, Fut>(
     retry_after: Duration,
     mut clear: F,
     mut waiting: impl FnMut(),
-) -> bool
+) -> ExactClear
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = ExactClear>,
 {
     loop {
         match clear().await {
-            ExactClear::Confirmed => return true,
-            ExactClear::Rejected => return false,
+            ExactClear::Confirmed => return ExactClear::Confirmed,
+            ExactClear::Rejected => return ExactClear::Rejected,
             ExactClear::Retryable
                 if !may_retry || *stop.borrow() || stop.has_changed().is_err() =>
             {
-                return false
+                return ExactClear::Retryable
             }
             ExactClear::Retryable => {}
         }
         waiting();
         tokio::select! {
             biased;
-            _ = stop.changed() => return false,
+            _ = stop.changed() => return ExactClear::Retryable,
             _ = tokio::time::sleep(retry_after) => {}
         }
         if *stop.borrow() || stop.has_changed().is_err() {
-            return false;
+            return ExactClear::Retryable;
         }
     }
 }
@@ -293,6 +294,7 @@ impl Owner {
                         retained,
                         window: route_window,
                         lifetime: NativeRevocation::new(),
+                        pending_clear: Arc::default(),
                         epoch: AtomicU64::new(0),
                         reading: tokio::sync::Mutex::new(()),
                     }))
@@ -481,6 +483,7 @@ impl Owner {
             retained: RouteSource::ReadAll(Arc::new(portfolio)),
             window: CatalogueWindow::WhileDesktopOpen,
             lifetime: NativeRevocation::new(),
+            pending_clear: Arc::default(),
             epoch: AtomicU64::new(0),
             reading: tokio::sync::Mutex::new(()),
         }))
@@ -495,6 +498,7 @@ impl Owner {
         self.check()?;
         let tunnel = owner.device.tunnel;
         let catalogue_lifetime = owner.lifetime.clone();
+        let pending_clear = owner.pending_clear.clone();
         let (stop, cancel) = tokio::sync::watch::channel(false);
         let phase = Arc::new(AtomicU8::new(1));
         let retired = Arc::new(AtomicBool::new(false));
@@ -520,6 +524,7 @@ impl Owner {
             task,
             retired,
             catalogue_lifetime,
+            pending_clear,
         ));
         Ok(())
     }
@@ -706,7 +711,13 @@ impl CatalogueOwner {
             || status.store(5, Ordering::Release),
         )
         .await;
-        if !cleaned || !endpoint_closed {
+        if endpoint_closed
+            && matches!(self.purpose, RoutePurpose::ReadAll)
+            && cleaned == ExactClear::Retryable
+        {
+            self.pending_clear.remember(offer.digest);
+        }
+        if cleaned != ExactClear::Confirmed || !endpoint_closed {
             return Err(uncertain());
         }
         retired.store(true, Ordering::Release);
@@ -751,36 +762,50 @@ impl CatalogueOwner {
     }
 
     async fn clear_published_offer(&self, offer: &SignedCatalogueOffer) -> ExactClear {
+        if offer.grant != self.grant_id {
+            return ExactClear::Rejected;
+        }
+        self.owner
+            .clear_exact_catalogue(self.device.tunnel, offer.digest)
+            .await
+    }
+}
+
+impl Owner {
+    pub(super) async fn clear_exact_catalogue(
+        &self,
+        expected_tunnel: [u8; 16],
+        digest: [u8; 32],
+    ) -> ExactClear {
         use control::ControlFailure;
         // Only the same authenticated tunnel/digest can be retired. A lost
         // reply is not a retirement, even after the relay's nominal TTL.
-        if offer.grant != self.grant_id || self.owner.check_document().is_err() {
+        if self.check_document().is_err() {
             return ExactClear::Rejected;
         }
         let Ok(setup) = self
-            .owner
             .profile
-            .operation(&self.owner.lifetime, Instant::now() + CONTROL_BUDGET)
+            .operation(&self.lifetime, Instant::now() + CONTROL_BUDGET)
         else {
             return ExactClear::Rejected;
         };
         let reply = control::share_request(
             setup,
-            self.owner.address,
+            self.address,
             ShareCommand::Clear {
-                tunnel: self.device.tunnel,
-                catalog_digest: offer.digest,
+                tunnel: expected_tunnel,
+                catalog_digest: digest,
             },
         )
         .await;
-        if self.owner.check_document().is_err() {
+        if self.check_document().is_err() {
             return ExactClear::Rejected;
         }
         match reply {
             Ok(ShareResponse::Cleared {
                 tunnel,
                 catalog_digest,
-            }) if tunnel == hex(&self.device.tunnel) && catalog_digest == hex(&offer.digest) => {
+            }) if tunnel == hex(&expected_tunnel) && catalog_digest == hex(&digest) => {
                 ExactClear::Confirmed
             }
             Err(ControlFailure::Relay(
@@ -790,7 +815,10 @@ impl CatalogueOwner {
             _ => ExactClear::Rejected,
         }
     }
+}
 
+#[allow(dead_code)]
+impl CatalogueOwner {
     async fn serve_selection(
         self: &Arc<Self>,
         selection: ShareSelectionKey,
@@ -1254,7 +1282,7 @@ mod tests {
         let (stop_tx, mut stop) = watch::channel(false);
         let attempts = Cell::new(0);
         let waiting = Cell::new(0);
-        assert!(
+        assert_eq!(
             wait_for_exact_clear(
                 &mut stop,
                 true,
@@ -1270,13 +1298,14 @@ mod tests {
                 },
                 || waiting.set(waiting.get() + 1)
             )
-            .await
+            .await,
+            ExactClear::Confirmed,
         );
         assert_eq!((attempts.get(), waiting.get()), (3, 2));
 
         attempts.set(0);
-        assert!(
-            !wait_for_exact_clear(
+        assert_eq!(
+            wait_for_exact_clear(
                 &mut stop,
                 true,
                 Duration::from_secs(300),
@@ -1288,7 +1317,8 @@ mod tests {
                     stop_tx.send_replace(true);
                 }
             )
-            .await
+            .await,
+            ExactClear::Retryable,
         );
         assert_eq!(attempts.get(), 1);
     }
@@ -1299,8 +1329,8 @@ mod tests {
         for (can_retry, outcome) in [(true, ExactClear::Rejected), (false, ExactClear::Retryable)] {
             let (_stop_tx, mut stop) = tokio::sync::watch::channel(false);
             let attempts = Cell::new(0);
-            assert!(
-                !wait_for_exact_clear(
+            assert_eq!(
+                wait_for_exact_clear(
                     &mut stop,
                     can_retry,
                     Duration::ZERO,
@@ -1310,7 +1340,8 @@ mod tests {
                     },
                     || panic!("must not wait or request a new offer")
                 )
-                .await
+                .await,
+                outcome,
             );
             assert_eq!(attempts.get(), 1);
         }
