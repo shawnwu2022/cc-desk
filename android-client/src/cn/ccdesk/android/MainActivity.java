@@ -34,6 +34,7 @@ public final class MainActivity extends Activity {
     private UUID lastHomeSelection;
     private DesktopStore store;
     private NativeDesktopBackend backend;
+    private boolean restoringDevices;
     private boolean pairingPending;
     private boolean cancellingEnrollment;
     private enum PairingNotice { NONE, FAILED, SAVED, CANCELLED, CANCEL_UNCONFIRMED }
@@ -73,8 +74,15 @@ public final class MainActivity extends Activity {
         }
         active = true;
         if (backend != null) {
-            try { backend.restore(store.read(), identities); }
-            catch (IOException ignored) {}
+            try {
+                restoringDevices = true;
+                backend.restore(store.read(), identities, () -> {
+                    restoringDevices = false;
+                    if (active) render();
+                });
+            } catch (IOException ignored) {
+                restoringDevices = false;
+            }
         }
         render();
     }
@@ -160,6 +168,9 @@ public final class MainActivity extends Activity {
             } else if (pairingNotice == PairingNotice.CANCEL_UNCONFIRMED) {
                 home.title(card, "无法确认配对已取消", 20, true);
                 home.body(card, "请检查设备列表。如果该电脑已配对，可在电脑端撤销手机授权。", 15);
+            } else if (restoringDevices && rows.isEmpty()) {
+                home.title(card, "正在恢复设备", 20, true);
+                home.body(card, "正在检查本机保存的配对记录。", 15);
             } else if (rows.isEmpty()) {
                 home.title(card, "配对第一台电脑", 20, true);
                 home.body(card, "在电脑的远程连接页创建邀请，用手机扫描二维码或输入配对码。", 15);
@@ -183,7 +194,7 @@ public final class MainActivity extends Activity {
                     refreshDesktop(row);
                 }).setContentDescription("查看 " + name + " 的会话");
             }
-            home.action(card, "设备设置", false, () -> editDesktopAlias(row, name))
+            home.action(card, "改别名", false, () -> editDesktopAlias(row, name))
                 .setContentDescription("打开 " + name + " 的设备设置");
         }
     }

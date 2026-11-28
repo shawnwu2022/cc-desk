@@ -8,7 +8,7 @@ describe('Android paired desktop list wiring', () => {
     expect(activity).toContain('List<DesktopBackend.Desktop> rows = store.read();')
     expect(activity).not.toContain('rows.removeIf(')
     expect(activity).toMatch(/if \(!canUseDesktop\(desktop\)\) \{[^}]*return true;\s*\}/)
-    expect(activity).toMatch(/home\.action\(card, "设备设置", false, \(\) -> editDesktopAlias\(row, name\)\)/)
+    expect(activity).toMatch(/home\.action\(card, "改别名", false, \(\) -> editDesktopAlias\(row, name\)\)/)
   })
   it('AndroidDesktopList_GatesBulkAndScopedRefreshOnVerification_002', () => {
     expect(activity).toContain('rows.stream().anyMatch(this::canRefreshRow)')
@@ -38,5 +38,10 @@ describe('Android paired desktop list wiring', () => {
     expect(activity).toMatch(/onStop\(\) \{[^}]*sessionRetryHandler.removeCallbacks\(retryOrdinarySessions\)/)
     expect(activity).toContain('if (!canUseDesktop(row) || !initialSessionLoads.contains(row.localId)) continue;')
     expect(activity).toMatch(/state == DesktopBackend.State.DISCONNECTED\s*\|\| state == DesktopBackend.State.UNAVAILABLE\) refreshDesktop\(row\)/)
+  })
+  it('AndroidDesktopList_RestoringIsNotFirstUse_006', () => {
+    expect(activity).toMatch(/else if \(restoringDevices && rows\.isEmpty\(\)\) \{[^}]*正在恢复设备[^}]*\} else if \(rows\.isEmpty\(\)\)/)
+    expect(activity).toMatch(/backend\.restore\(store\.read\(\), identities, \(\) -> \{[^}]*restoringDevices = false;[^}]*render\(\);/)
+    expect(activity).toContain('home.action(card, "改别名", false, () -> editDesktopAlias(row, name))')
   })
 })
