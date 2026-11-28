@@ -13,14 +13,16 @@ const phone: ApprovedDevice = { tunnel: 'fixture-tunnel', phoneId: 'fixture-abcd
 const snapshot: PairingSnapshot = { invite: null, pending: [], scopeChoices: [], devices: [phone] }
 const mounted: Array<{ unmount(): void }> = []
 afterEach(() => { while (mounted.length) mounted.pop()!.unmount() })
-async function setup() {
+async function setup(ordinary = false) {
   fixture.store = reactive({ tabs: new Map([
     ['running', { tabId: 'running', status: 'running', cli: 'codex', runId: 'run-1', generation: 7, title: 'First' }],
     ['stopped', { tabId: 'stopped', status: 'stopped', cli: 'claude', runId: 'old', generation: 3, title: 'Inactive' }],
   ]) })
   const current = vi.fn<VerifiedPairing['current']>().mockResolvedValue(snapshot)
   const share = vi.fn<NonNullable<VerifiedPairing['share']>>().mockRejectedValue(new Error('private fixture detail'))
+  const startOrdinaryCatalogueRead = vi.fn().mockResolvedValue(snapshot)
   const handle: VerifiedPairing = { endpoint: 'wss://relay.test/relay', current, share,
+    ...(ordinary ? { startOrdinaryCatalogueRead } : {}),
     create: vi.fn(), cancel: vi.fn(), approve: vi.fn(), reject: vi.fn(), revoke: vi.fn() }
   const view = mount(RemoteConnectionsView, { global: {
     plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
@@ -35,8 +37,8 @@ async function setup() {
   await view.get('input').setValue(handle.endpoint)
   await button(en.remotePairingVerify).trigger('click')
   await flushPromises()
-  await view.get('input[value="running:7"]').setValue(true)
-  return { view, current, share, button }
+  if (!ordinary) await view.get('input[value="running:7"]').setValue(true)
+  return { view, current, share, button, startOrdinaryCatalogueRead }
 }
 describe('Remote share error recovery', () => {
   it('RemoteShare_ReadsAuthoritativeStateWithoutReplayingShare_001', async () => {
@@ -78,5 +80,17 @@ describe('Remote share error recovery', () => {
     } finally {
       localStorage.clear()
     }
+  })
+  it('RemoteShare_OrdinaryCatalogueNeedsNoSessionProjectOrCliChoice_004', async () => {
+    const { view, share, startOrdinaryCatalogueRead } = await setup(true)
+    expect(view.find('input[value="running:7"]').exists()).toBe(false)
+    expect(view.find('[data-advanced-share-options]').exists()).toBe(false)
+    expect(startOrdinaryCatalogueRead).not.toHaveBeenCalled()
+    await view.get('[data-start-ordinary-catalogue]').trigger('click')
+    await flushPromises()
+    expect(startOrdinaryCatalogueRead).toHaveBeenCalledExactlyOnceWith(phone)
+    expect(share).not.toHaveBeenCalled()
+    await view.get('[data-toggle-advanced-sharing]').trigger('click')
+    expect(view.find('input[value="running:7"]').exists()).toBe(true)
   })
 })
