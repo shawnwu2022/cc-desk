@@ -54,12 +54,7 @@ enum RoutePurpose {
 const MANAGEMENT_WINDOW: Duration = Duration::from_secs(300);
 const MIN_OFFER_BUDGET: Duration = Duration::from_secs(10);
 
-fn management_can_rotate(
-    now: Instant,
-    end: Instant,
-    stopped: bool,
-    previous_retired: bool,
-) -> bool {
+fn catalogue_can_rotate(now: Instant, end: Instant, stopped: bool, previous_retired: bool) -> bool {
     !stopped && previous_retired && end.saturating_duration_since(now) >= MIN_OFFER_BUDGET
 }
 
@@ -159,7 +154,7 @@ impl Owner {
             RoutePurpose::ReadAll => (
                 "Allow read-only session listing",
                 format!(
-                    "Allow this phone to list unarchived sessions from visible local projects across supported CLIs?\n\nDevice: {suffix}\n\nThis does not allow terminal input, archived sessions, or session changes."
+                    "Allow this phone to list unarchived sessions from visible local projects across supported CLIs?\n\nDevice: {suffix}\n\nSharing stops when this desktop pairing window ends or you stop sharing. This does not allow terminal input, archived sessions, or session changes."
                 ),
             ),
             RoutePurpose::Manage => (
@@ -183,10 +178,10 @@ impl Owner {
                 let Some(approval_end) = permit.consume(|(), end| end) else {
                     return Ok(None);
                 };
-                let end = if matches!(purpose, RoutePurpose::Manage) {
-                    self.deadline.min(Instant::now() + MANAGEMENT_WINDOW)
-                } else {
-                    approval_end
+                let end = match purpose {
+                    RoutePurpose::ReadAll => self.deadline,
+                    RoutePurpose::Manage => self.deadline.min(Instant::now() + MANAGEMENT_WINDOW),
+                    RoutePurpose::Read(_) => approval_end,
                 };
                 let owner = self.clone();
                 let desktop_window = window.clone();
@@ -325,9 +320,9 @@ impl Owner {
         let status = phase.clone();
         let retirement = retired.clone();
         let task = tokio::spawn(async move {
-            let result = if matches!(purpose, RoutePurpose::Manage) {
+            let result = if matches!(purpose, RoutePurpose::ReadAll | RoutePurpose::Manage) {
                 owner
-                    .serve_management_window(offer, cancel, &retirement)
+                    .serve_catalogue_window(offer, cancel, &retirement)
                     .await
             } else {
                 owner.publish_and_serve(offer, cancel, &retirement).await
@@ -365,7 +360,7 @@ impl CatalogueOwner {
     /// A fresh signed invitation is issued only once each previous relay
     /// catalogue and endpoint are confirmed retired. Client writes are never
     /// replayed: each successor starts with a new inventory and references.
-    async fn serve_management_window(
+    async fn serve_catalogue_window(
         self: &Arc<Self>,
         mut offer: SignedCatalogueOffer,
         mut stop: tokio::sync::watch::Receiver<bool>,
@@ -387,7 +382,7 @@ impl CatalogueOwner {
             if !closed {
                 return Err(uncertain());
             }
-            if !management_can_rotate(Instant::now(), self.end, stopped(&stop), closed) {
+            if !catalogue_can_rotate(Instant::now(), self.end, stopped(&stop), closed) {
                 retired.store(true, Ordering::Release);
                 return if stopped(&stop) { Ok(()) } else { result };
             }
@@ -400,7 +395,7 @@ impl CatalogueOwner {
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {},
                 };
             }
-            if !management_can_rotate(Instant::now(), self.end, stopped(&stop), closed) {
+            if !catalogue_can_rotate(Instant::now(), self.end, stopped(&stop), closed) {
                 retired.store(true, Ordering::Release);
                 return Ok(());
             }
@@ -943,13 +938,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn management_window_rejects_unsafe_rotation_and_preserves_monotonic_epochs() {
+    fn catalogue_window_rejects_unsafe_rotation_and_preserves_monotonic_epochs() {
         let clock = Instant::now();
         let end = clock + Duration::from_secs(30);
-        assert!(management_can_rotate(clock, end, false, true));
-        assert!(!management_can_rotate(clock, end, true, true));
-        assert!(!management_can_rotate(clock, end, false, false));
-        assert!(!management_can_rotate(
+        assert!(catalogue_can_rotate(clock, end, false, true));
+        assert!(!catalogue_can_rotate(clock, end, true, true));
+        assert!(!catalogue_can_rotate(clock, end, false, false));
+        assert!(!catalogue_can_rotate(
             clock + Duration::from_secs(21),
             end,
             false,
