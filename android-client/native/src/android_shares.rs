@@ -563,17 +563,25 @@ fn run(
         .ok()?;
         let relay = roles.relay_for_enrollment(member.relay_id());
         let point: [u8; 65] = input.relay[26..].try_into().ok()?;
-        let get = request_phone_shares(
-            member.origin().as_str(),
-            addr,
-            Duration::from_secs(3),
-            &relay,
-            &point,
-            PhoneShareCommand::GetShares {
-                tunnel: member.tunnel(),
-            },
-        );
-        let first = rt.block_on(bounded(&mut stop, get));
+        let get = || {
+            request_phone_shares(
+                member.origin().as_str(),
+                addr,
+                Duration::from_secs(3),
+                &relay,
+                &point,
+                PhoneShareCommand::GetShares {
+                    tunnel: member.tunnel(),
+                },
+            )
+        };
+        let first = rt.block_on(bounded(&mut stop, async {
+            if !input.management && input.mode == ListMode::Sessions {
+                crate::shares::await_ordinary_offer(get).await
+            } else {
+                get().await
+            }
+        }));
         if input.management {
             // Never fall through to read-only or terminal consent on failure.
             let (keys, provider) = roles.into_parts();

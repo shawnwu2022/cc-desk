@@ -571,3 +571,98 @@ mod tests {
         );
     }
 }
+
+/// A newly paired phone may receive its receipt before the host publishes.
+/// Retry only a validated empty reply. Errors never trigger a second request.
+#[cfg(any(target_os = "android", test))]
+pub(crate) async fn await_ordinary_offer<F, Fut, E>(
+    mut get: F,
+) -> Result<cc_desk_remote_transport::wss::PhoneShareResponse, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<cc_desk_remote_transport::wss::PhoneShareResponse, E>>,
+{
+    use cc_desk_remote_transport::wss::PhoneShareResponse;
+    use std::time::Duration;
+    use tokio::time::{Instant, sleep, timeout_at};
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut reply = get().await?;
+    while matches!(reply, PhoneShareResponse::SharesEmpty { .. }) {
+        let Ok(next) = timeout_at(deadline, async {
+            sleep(Duration::from_secs(1)).await;
+            if Instant::now() >= deadline {
+                return None;
+            }
+            Some(get().await)
+        })
+        .await
+        else {
+            break;
+        };
+        match next {
+            Some(value) => reply = value?,
+            None => break,
+        }
+    }
+    Ok(reply)
+}
+
+#[cfg(test)]
+mod offer_wait_tests {
+    use super::await_ordinary_offer;
+    use cc_desk_remote_transport::wss::PhoneShareResponse;
+    use std::{cell::Cell, future::ready, time::Duration};
+
+    #[tokio::test]
+    async fn returns_an_offer_published_after_the_first_empty_reply() {
+        let calls = Cell::new(0);
+        let response = await_ordinary_offer(|| {
+            calls.set(calls.get() + 1);
+            ready(Ok::<_, ()>(if calls.get() == 1 {
+                PhoneShareResponse::SharesEmpty {
+                    tunnel: "test".into(),
+                }
+            } else {
+                PhoneShareResponse::Shares {
+                    tunnel: "test".into(),
+                    catalog_digest: String::new(),
+                    catalog_envelope: String::new(),
+                    expires_unix_ms: 1,
+                }
+            }))
+        })
+        .await;
+        assert!(matches!(response, Ok(PhoneShareResponse::Shares { .. })));
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_a_transport_error() {
+        let calls = Cell::new(0);
+        let response = await_ordinary_offer(|| {
+            calls.set(calls.get() + 1);
+            ready(Err("transport"))
+        })
+        .await;
+        assert!(matches!(response, Err("transport")));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_wait_prevents_the_next_request() {
+        let calls = Cell::new(0);
+        let response = tokio::time::timeout(
+            Duration::from_millis(20),
+            await_ordinary_offer(|| {
+                calls.set(calls.get() + 1);
+                ready(Ok::<_, ()>(PhoneShareResponse::SharesEmpty {
+                    tunnel: "test".into(),
+                }))
+            }),
+        )
+        .await;
+        assert!(response.is_err());
+        assert_eq!(calls.get(), 1);
+    }
+}
