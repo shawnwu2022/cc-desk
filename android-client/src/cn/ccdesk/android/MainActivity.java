@@ -23,6 +23,7 @@ public final class MainActivity extends Activity {
     private SessionBrowser sessionBrowser;
     private boolean showingSessions;
     private boolean projectionForeground;
+    private final java.util.Set<UUID> initialSessionLoads = new java.util.HashSet<>();
     private final java.util.Map<UUID, TextView> managementViewports = new java.util.HashMap<>();
     private boolean lastHomeSessions;
     private UUID lastHomeSelection;
@@ -385,6 +386,18 @@ public final class MainActivity extends Activity {
             || state == DesktopBackend.State.CATALOGUE_READY;
     }
 
+    private void loadInitialOrdinarySessions() {
+        if (!active || !projectionForeground || backend == null || controlPanel != null) return;
+        try {
+            for (DesktopBackend.Desktop row : store.read()) {
+                if (canUseDesktop(row) && backend.state(row) == DesktopBackend.State.DISCONNECTED
+                        && initialSessionLoads.add(row.localId)) refreshDesktop(row);
+            }
+        } catch (IOException ignored) {
+            // 设备页继续展示现有的本地读取失败提示。
+        }
+    }
+
     private void refreshDesktop(DesktopBackend.Desktop desktop) {
         if (canUseDesktop(desktop) && canRefresh(backend.state(desktop))) backend.loadShares(desktop, identities);
     }
@@ -626,6 +639,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateConnectionViews() {
+        loadInitialOrdinarySessions();
         if (controlPanel == null) { render(); return; }
         DesktopBackend.Desktop desktop = controlDesktop;
         long original = controlHandle;
@@ -686,6 +700,7 @@ public final class MainActivity extends Activity {
     @Override protected void onStart() {
         super.onStart();
         projectionForeground = true;
+        loadInitialOrdinarySessions();
     }
 
     @Override protected void onStop() {
@@ -877,7 +892,11 @@ public final class MainActivity extends Activity {
         render();
         DesktopBackend.EnrollmentCallback completion = new DesktopBackend.EnrollmentCallback() {
             @Override public void approved(DesktopBackend.Desktop desktop) {
-                runOnUiThread(() -> finishEnrollment(epoch, PairingNotice.SAVED));
+                runOnUiThread(() -> {
+                    if (!active || epoch != enrollmentEpoch) return;
+                    finishEnrollment(epoch, PairingNotice.SAVED);
+                    loadInitialOrdinarySessions();
+                });
             }
             @Override public void state(DesktopBackend.State state) {
                 if (state != DesktopBackend.State.WAITING_FOR_DESKTOP)

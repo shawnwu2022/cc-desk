@@ -25,4 +25,11 @@ describe('Android paired desktop list wiring', () => {
     expect(activity).toContain('return desktop.name.equals("电脑 " + desktop.hostId.substring(0, 8))')
     expect(activity).not.toContain('name + " · " + row.hostId')
   })
+  it('AndroidDesktopList_AutomaticallyLoadsOnlyVerifiedOrdinarySessions_004', () => {
+    expect(activity).toMatch(/onStart\(\) \{[^}]*loadInitialOrdinarySessions\(\)/)
+    expect(activity).toMatch(/private void updateConnectionViews\(\) \{\s+loadInitialOrdinarySessions\(\)/)
+    expect(activity).toMatch(/finishEnrollment\(epoch, PairingNotice.SAVED\);\s+loadInitialOrdinarySessions\(\)/)
+    expect(activity).toContain('canUseDesktop(row) && backend.state(row) == DesktopBackend.State.DISCONNECTED')
+    expect(activity).toContain('initialSessionLoads.add(row.localId)) refreshDesktop(row);')
+  })
 })
