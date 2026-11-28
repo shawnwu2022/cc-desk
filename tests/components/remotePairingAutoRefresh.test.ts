@@ -4,6 +4,9 @@ import { createI18n } from 'vue-i18n'
 import RemoteConnectionsView from '@/components/remote/RemoteConnectionsView.vue'
 import { DESKTOP_PAIRING_PORT, type PairingSnapshot, type VerifiedPairing } from '@/components/remote/desktopPairingPort'
 import en from '@/i18n/locales/en'
+import { nativeObserverSetup } from '@/api/tauri'
+
+vi.mock('@/api/tauri', () => ({ nativeObserverSetup: vi.fn() }))
 
 vi.mock('@/stores/nativeTabs', () => ({ useNativeTabsStore: () => ({ tabs: new Map() }) }))
 vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({ projects: [
@@ -12,7 +15,10 @@ vi.mock('@/stores/workspace', () => ({ useWorkspaceStore: () => ({ projects: [
 ] }) }))
 vi.mock('@/stores/cliProfiles', () => ({ useCliProfilesStore: () => ({ selected: { codex: { id: 'profile-codex', revision: '4' }, opencode: { id: 'profile-opencode', revision: '7' }, claude: { id: 'profile-claude', revision: '8' } } }) }))
 let view: VueWrapper | undefined
-beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }))
+beforeEach(() => {
+  vi.mocked(nativeObserverSetup).mockReset()
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+})
 afterEach(() => { view?.unmount(); view = undefined; vi.useRealTimers() })
 
 async function mountPairing(lifetime = 20000, ordinary = false) {
@@ -161,4 +167,49 @@ it('PairingInvite_ExplicitlyPairsAndSharesOrdinaryListInOneAction', async () => 
   await view!.get('[data-pair-and-share]').trigger('click')
   await flushPromises()
   expect(approve).toHaveBeenCalledExactlyOnceWith(called.pending[0], null, true)
+})
+
+
+it('Expired desktop setup reopens with local sharing controls and cannot start a new grant', async () => {
+  const device = { phoneId: 'fixture-phone', phoneRelayPublicKeySec1: 'relay-key',
+    phoneEndpointSpki: 'endpoint-key', endpointBinding: 'binding', tunnel: 'fixture-tunnel',
+    sharing: 'offered' as const }
+  const standby = { ...device, tunnel: 'fixture-other', sharing: 'none' as const }
+  const snapshot: PairingSnapshot = {
+    invite: null, pending: [], scopeChoices: [], devices: [device, standby], setupExpired: true,
+  }
+  vi.mocked(nativeObserverSetup)
+    .mockResolvedValueOnce({ kind: 'available' })
+    .mockResolvedValueOnce({ kind: 'resumed', ticket: 'local-ticket', endpoint: 'wss://relay.test/relay', snapshot })
+    .mockResolvedValueOnce({ kind: 'snapshot', snapshot: { ...snapshot, devices: [{ ...device, sharing: 'none' }, standby] } })
+    .mockResolvedValueOnce({ kind: 'snapshot', snapshot: { ...snapshot, devices: [standby] } })
+  view = mount(RemoteConnectionsView, {
+    global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })] },
+  })
+  await flushPromises()
+  expect(view.text()).toContain(en.remotePairingSetupExpired)
+  expect(view.get('input').attributes('disabled')).toBeDefined()
+  expect(view.find('[data-start-ordinary-catalogue]').exists()).toBe(false)
+  expect(view.findAll('button').some(button => button.text() === en.remotePairingCreate)).toBe(false)
+  const stop = view.findAll('button').find(button => button.text() === en.remotePairingShareStop)
+  expect(stop).toBeDefined()
+  await stop!.trigger('click')
+  await flushPromises()
+  expect(vi.mocked(nativeObserverSetup).mock.calls.map(([request]) => request)).toEqual([
+    { action: 'available' },
+    { action: 'resume' },
+    { action: 'stopSharing', ticket: 'local-ticket' },
+  ])
+  expect(view.findAll('button').some(button => button.text() === en.remotePairingShareStop)).toBe(false)
+  expect(view.findAll('button').some(button => button.text() === en.remotePairingVerify)).toBe(true)
+  const revoke = view.findAll('button').find(button => button.text() === en.remotePairingRevoke)
+  expect(revoke).toBeDefined()
+  await revoke!.trigger('click')
+  await flushPromises()
+  expect(nativeObserverSetup).toHaveBeenLastCalledWith({
+    action: 'revoke', ticket: 'local-ticket',
+    target: { tunnel: device.tunnel, phoneId: device.phoneId, phoneEndpointSpki: device.phoneEndpointSpki,
+      phoneRelayPublicKeySec1: device.phoneRelayPublicKeySec1, endpointBinding: device.endpointBinding },
+  })
+  expect(view.findAll('[data-device-label]')).toHaveLength(1)
 })

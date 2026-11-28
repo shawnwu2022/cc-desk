@@ -36,6 +36,7 @@ export interface PairingSnapshot {
   readonly scopeChoices: readonly PairingScopeChoice[]
   readonly devices: readonly ApprovedDevice[]
   readonly ordinaryShareUnavailable?: boolean
+  readonly setupExpired?: boolean
 }
 
 /** Only an authenticated native Host bridge may provide this handle. All

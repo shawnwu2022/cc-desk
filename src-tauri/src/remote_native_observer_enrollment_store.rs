@@ -50,6 +50,7 @@ pub(crate) struct DeviceSummary {
     pub(crate) state: State,
 }
 
+#[derive(Clone)]
 pub(crate) struct RelayPair {
     pub(crate) request_id: [u8; 16],
     pub(crate) tunnel: [u8; 16],
@@ -260,7 +261,11 @@ impl Store {
     // Persist local denial first; if Relay later fails, never restore this row.
     // Caller must separately stop an active stream and retire the exact Relay
     // membership, reporting Unknown until confirmed.
-    pub(crate) fn revoke_local(&self, approval: &RevokeApproval) -> Result<Option<[u8; 16]>> {
+    pub(crate) fn revoke_local(
+        &self,
+        approval: &RevokeApproval,
+        check_owner: impl Fn() -> Result<()>,
+    ) -> Result<Option<[u8; 16]>> {
         let Some(permit) = approval.machine.take() else {
             return Ok(None);
         };
@@ -270,7 +275,7 @@ impl Store {
                     if Instant::now() >= end || approval.machine.lease.is_revoked() {
                         return Err(StoreError::Unauthorized);
                     }
-                    Ok(())
+                    check_owner()
                 })?;
                 Ok(pair.tunnel)
             })

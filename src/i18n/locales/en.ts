@@ -47,6 +47,7 @@ export default {
   remotePairingInvite: "Current invitation",
   remotePairingExpires: "Expires in {time}",
   remotePairingExpired: "The QR code expired. Generate a new one.",
+  remotePairingSetupExpired: "Pairing is closed. You can still stop sharing or revoke a device. Reconnect to add a device or start a new share.",
   remotePairingQr: "Open CC Desk on your Android phone and scan this code.",
   remotePairingCode: "Manual invitation code",
   remotePairingCancel: "Cancel invitation",

@@ -21,6 +21,7 @@ use cc_desk_remote_transport::wss::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -49,6 +50,7 @@ pub(crate) struct Owner {
     deadline: Instant,
     state: Mutex<Cache>,
     store: Arc<Store>,
+    revocations_pending_relay: parking_lot::Mutex<HashSet<[u8; 16]>>,
     sharing: Mutex<Option<shares_owner::Task>>,
     runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
     host_service: Arc<crate::remote_host::RemoteHostService>,
@@ -80,6 +82,7 @@ pub(crate) struct Snapshot {
     pending: Vec<Pending>,
     devices: Vec<Device>,
     scope_choices: Vec<()>,
+    setup_expired: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     ordinary_share_unavailable: Option<bool>,
 }
@@ -110,13 +113,36 @@ pub(crate) struct Device {
     sharing: &'static str,
     revocation_pending: bool,
 }
+impl Device {
+    fn display(d: super::store::DeviceSummary, sharing: Option<([u8; 16], u8)>) -> Self {
+        Self {
+            sharing: match sharing
+                .filter(|(id, _)| *id == d.tunnel)
+                .map(|(_, phase)| phase)
+            {
+                Some(1) => "offered",
+                Some(2) => "active",
+                Some(3) => "unknown",
+                Some(4) => "controlling",
+                _ => "none",
+            },
+            revocation_pending: d.state == DeviceState::Revoked,
+            identity: DeviceTarget {
+                tunnel: hex(&d.tunnel),
+                phone_id: hex(&d.phone_id),
+                phone_relay_public_key_sec1: hex(&d.phone_relay_public_key_sec1),
+                phone_endpoint_spki: hex(&d.phone_endpoint_spki),
+                endpoint_binding: hex(&d.endpoint_binding),
+            },
+        }
+    }
+}
+
 pub(crate) enum Operation {
-    Current,
     Create(u16),
     Cancel(String),
     Reject(Pending),
     Approve(Pending, bool),
-    Revoke(DeviceTarget),
 }
 
 impl OwnerService {
@@ -169,6 +195,7 @@ impl OwnerService {
             deadline: Instant::now() + Duration::from_secs(720),
             state: Mutex::new(Cache::default()),
             store: Arc::new(store),
+            revocations_pending_relay: parking_lot::Mutex::default(),
             sharing: Mutex::new(None),
             runtime,
             host_service,
@@ -184,15 +211,51 @@ impl OwnerService {
         caller: &CallerIdentity,
         binding: &Arc<DocumentBinding<NativeRun>>,
     ) -> Result<Arc<Owner>, SafeError> {
+        let owner = self.get_for_retirement(ticket, caller, binding)?;
+        owner.check()?;
+        Ok(owner)
+    }
+
+    pub(crate) fn get_for_retirement(
+        &self,
+        ticket: &str,
+        caller: &CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+    ) -> Result<Arc<Owner>, SafeError> {
+        let owner = self.same_document_owner(caller, binding)?;
+        if owner.ticket != ticket {
+            return Err(locked());
+        }
+        Ok(owner)
+    }
+
+    fn same_document_owner(
+        &self,
+        caller: &CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+    ) -> Result<Arc<Owner>, SafeError> {
         let owner = self.active.lock().clone().ok_or_else(locked)?;
-        if owner.ticket != ticket
-            || &owner.caller != caller
+        if &owner.caller != caller
             || !std::sync::Weak::ptr_eq(&owner.document, &Arc::downgrade(binding))
         {
             return Err(locked());
         }
-        owner.check()?;
+        owner.check_document()?;
         Ok(owner)
+    }
+
+    pub(crate) async fn resume(
+        &self,
+        caller: &CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+    ) -> Result<(String, String, Snapshot), SafeError> {
+        let owner = self.same_document_owner(caller, binding)?;
+        let snapshot = owner.current().await?;
+        Ok((
+            owner.ticket.clone(),
+            owner.profile.endpoint().as_str().to_owned(),
+            snapshot,
+        ))
     }
 }
 impl Drop for Owner {
@@ -363,6 +426,7 @@ impl Owner {
             .as_ref()
             .map(|t| (t.tunnel, t.phase()));
         let store = self.store.clone();
+        let unresolved = self.revocations_pending_relay.lock().clone();
         let devices = tokio::task::spawn_blocking(move || -> Result<Vec<Device>, SafeError> {
             let devices = store.list_locked().map_err(|_| locked())?;
             let mut result = Vec::new();
@@ -375,6 +439,9 @@ impl Owner {
                     endpoint_binding: d.endpoint_binding,
                 };
                 if !pairs.iter().any(|p| party_matches(p, &candidate)) {
+                    if d.state == DeviceState::Revoked && unresolved.contains(&d.tunnel) {
+                        result.push(Device::display(d, sharing));
+                    }
                     continue;
                 }
                 if d.state == DeviceState::Pending {
@@ -382,26 +449,7 @@ impl Owner {
                         .reconcile_present(&candidate)
                         .map_err(|_| uncertain())?;
                 }
-                result.push(Device {
-                    sharing: match sharing
-                        .filter(|(id, _)| *id == d.tunnel)
-                        .map(|(_, phase)| phase)
-                    {
-                        Some(1) => "offered",
-                        Some(2) => "active",
-                        Some(3) => "unknown",
-                        Some(4) => "controlling",
-                        _ => "none",
-                    },
-                    revocation_pending: d.state == DeviceState::Revoked,
-                    identity: DeviceTarget {
-                        tunnel: hex(&d.tunnel),
-                        phone_id: hex(&d.phone_id),
-                        phone_relay_public_key_sec1: hex(&d.phone_relay_public_key_sec1),
-                        phone_endpoint_spki: hex(&d.phone_endpoint_spki),
-                        endpoint_binding: hex(&d.endpoint_binding),
-                    },
-                });
+                result.push(Device::display(d, sharing));
             }
             Ok(result)
         })
@@ -413,9 +461,69 @@ impl Owner {
             pending,
             devices,
             scope_choices: Vec::new(),
+            setup_expired: false,
             ordinary_share_unavailable: None,
         })
     }
+
+    pub(crate) async fn current(&self) -> Result<Snapshot, SafeError> {
+        self.check_document()?;
+        if Instant::now() < self.deadline {
+            let mut cache = self
+                .state
+                .try_lock()
+                .map_err(|_| error("REMOTE_PAIRING_BUSY"))?;
+            match self.snapshot(&mut cache).await {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(err)
+                    if Instant::now() < self.deadline && self.sharing.lock().await.is_none() =>
+                {
+                    return Err(err)
+                }
+                Err(_) => {}
+            }
+        }
+        self.local_status().await
+    }
+
+    async fn local_status(&self) -> Result<Snapshot, SafeError> {
+        self.check_document()?;
+        let sharing = self
+            .sharing
+            .lock()
+            .await
+            .as_ref()
+            .map(|task| (task.tunnel, task.phase()));
+        let store = self.store.clone();
+        let unresolved = self.revocations_pending_relay.lock().clone();
+        let devices = tokio::task::spawn_blocking(move || {
+            Ok::<_, SafeError>(
+                store
+                    .list_locked()
+                    .map_err(|_| locked())?
+                    .into_iter()
+                    .filter(|device| {
+                        device.state == DeviceState::Confirmed
+                            || (device.state == DeviceState::Revoked
+                                && unresolved.contains(&device.tunnel))
+                    })
+                    .map(|device| Device::display(device, sharing))
+                    .collect(),
+            )
+        })
+        .await
+        .map_err(|_| uncertain())??;
+        self.check_document()?;
+        Ok(Snapshot {
+            invite: None,
+            pending: Vec::new(),
+            devices,
+            scope_choices: Vec::new(),
+            setup_expired: Instant::now() >= self.deadline,
+            ordinary_share_unavailable: None,
+        })
+    }
+
     pub(crate) async fn execute(
         self: &Arc<Self>,
         op: Operation,
@@ -428,7 +536,6 @@ impl Owner {
             .map_err(|_| error("REMOTE_PAIRING_BUSY"))?;
         self.check()?;
         match op {
-            Operation::Current => (),
             Operation::Create(ttl) => {
                 if !matches!(ttl, 60 | 300 | 600) {
                     return Err(locked());
@@ -563,57 +670,115 @@ impl Owner {
                     return Ok(snapshot);
                 }
             }
-            Operation::Revoke(target) => {
-                let (_, pairs) = self.listing().await?;
-                let store = self.store.clone();
-                let durable = tokio::task::spawn_blocking(move || store.list_locked())
-                    .await
-                    .map_err(|_| uncertain())?
-                    .map_err(|_| locked())?;
-                let row = durable
-                    .into_iter()
-                    .find(|d| {
-                        hex(&d.tunnel) == target.tunnel
-                            && hex(&d.phone_id) == target.phone_id
-                            && hex(&d.phone_endpoint_spki) == target.phone_endpoint_spki
-                            && hex(&d.phone_relay_public_key_sec1)
-                                == target.phone_relay_public_key_sec1
-                            && hex(&d.endpoint_binding) == target.endpoint_binding
-                    })
-                    .ok_or_else(locked)?;
-                let pair = RelayPair {
-                    request_id: row.request_id,
-                    tunnel: row.tunnel,
-                    phone_id: row.phone_id,
-                    phone_relay_public_key_sec1: row.phone_relay_public_key_sec1,
-                    endpoint_binding: row.endpoint_binding,
-                };
-                if !pairs.iter().any(|p| party_matches(p, &pair)) {
-                    return Err(locked());
-                }
-                let consent =
-                    Arc::new(RevokeApproval::show(app, window, pair).map_err(|_| locked())?);
-                while consent.pending() {
-                    self.check()?;
-                    let s = self.store.clone();
-                    let decision = consent.clone();
-                    let retired = tokio::task::spawn_blocking(move || s.revoke_local(&decision))
-                        .await
-                        .map_err(|_| uncertain())?
-                        .map_err(|_| uncertain())?;
-                    if let Some(tunnel) = retired {
-                        self.stop_share(Some(tunnel)).await?;
-                        if !matches!(self.wire(Command::Revoke { tunnel }).await?, Response::Revoked { tunnel:id } if id == hex(&tunnel))
-                        {
-                            return Err(uncertain());
-                        }
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-            }
         }
         self.snapshot(&mut cache).await
+    }
+
+    pub(crate) async fn revoke_existing(
+        self: &Arc<Self>,
+        target: DeviceTarget,
+        app: &AppHandle,
+        window: &Window,
+    ) -> Result<Snapshot, SafeError> {
+        self.check_document()?;
+        let mutation = self
+            .state
+            .try_lock()
+            .map_err(|_| error("REMOTE_PAIRING_BUSY"))?;
+        let store = self.store.clone();
+        let row = tokio::task::spawn_blocking(move || {
+            store
+                .list_locked()
+                .map_err(|_| locked())?
+                .into_iter()
+                .filter(|d| matches!(d.state, DeviceState::Confirmed | DeviceState::Revoked))
+                .find(|d| {
+                    hex(&d.tunnel) == target.tunnel
+                        && hex(&d.phone_id) == target.phone_id
+                        && hex(&d.phone_endpoint_spki) == target.phone_endpoint_spki
+                        && hex(&d.phone_relay_public_key_sec1) == target.phone_relay_public_key_sec1
+                        && hex(&d.endpoint_binding) == target.endpoint_binding
+                })
+                .ok_or_else(locked)
+        })
+        .await
+        .map_err(|_| uncertain())??;
+        self.check_document()?;
+        let exact = RelayPair {
+            request_id: row.request_id,
+            tunnel: row.tunnel,
+            phone_id: row.phone_id,
+            phone_relay_public_key_sec1: row.phone_relay_public_key_sec1,
+            endpoint_binding: row.endpoint_binding,
+        };
+        let consent =
+            Arc::new(RevokeApproval::show(app, window, exact.clone()).map_err(|_| locked())?);
+        let mut denied_here = false;
+        while consent.pending() {
+            self.check_document()?;
+            let owner = self.clone();
+            let decision = consent.clone();
+            let retired = tokio::task::spawn_blocking(move || {
+                owner.store.revoke_local(&decision, || {
+                    owner.check_document().map_err(|_| StoreError::Unauthorized)
+                })
+            })
+            .await
+            .map_err(|_| uncertain())?
+            .map_err(|_| uncertain())?;
+            if let Some(tunnel) = retired {
+                denied_here = true;
+                self.revocations_pending_relay.lock().insert(tunnel);
+                let stopped = self.stop_share(Some(tunnel)).await;
+                let relay = self.retire_relay_pair(&exact).await;
+                if relay.is_ok() && stopped.is_ok() {
+                    self.revocations_pending_relay.lock().remove(&tunnel);
+                }
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        drop(mutation);
+        if denied_here {
+            self.local_status().await
+        } else {
+            self.current().await
+        }
+    }
+
+    async fn retire_relay_pair(&self, exact: &RelayPair) -> Result<(), SafeError> {
+        // After local denial, only check and retire the exact protected pair.
+        // No renderer-supplied command or fresh grant enters this lane.
+        let one = |command| async move {
+            self.check_document()?;
+            let setup = self
+                .profile
+                .operation(&self.lifetime, Instant::now() + Duration::from_secs(8))
+                .map_err(|_| locked())?;
+            let reply = control::request(setup, self.address, command)
+                .await
+                .map_err(|_| uncertain())?;
+            self.check_document()?;
+            Ok::<_, SafeError>(reply)
+        };
+        let Response::List { pairs, .. } = one(Command::List).await? else {
+            return Err(uncertain());
+        };
+        let tunnel = hex(&exact.tunnel);
+        let mut matching = pairs.iter().filter(|pair| pair.tunnel == tunnel);
+        match (matching.next(), matching.next()) {
+            (None, None) => return Ok(()),
+            (Some(pair), None) if party_matches(pair, exact) => {}
+            _ => return Err(locked()),
+        }
+        match one(Command::Revoke {
+            tunnel: exact.tunnel,
+        })
+        .await?
+        {
+            Response::Revoked { tunnel: id } if id == tunnel => Ok(()),
+            _ => Err(uncertain()),
+        }
     }
 }
 fn qr_rows(payload: &str) -> Option<Vec<String>> {

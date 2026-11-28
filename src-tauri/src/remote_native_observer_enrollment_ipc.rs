@@ -40,6 +40,7 @@ enum Action {
         endpoint: String,
     },
     Available,
+    Resume,
     Verify {
         endpoint: String,
     },
@@ -114,6 +115,11 @@ pub(crate) enum Reply {
         endpoint: String,
     },
     Snapshot {
+        snapshot: Snapshot,
+    },
+    Resumed {
+        ticket: String,
+        endpoint: String,
         snapshot: Snapshot,
     },
     Declined,
@@ -226,17 +232,20 @@ pub(crate) async fn remote_native_observer_setup(
     let window = webview.window();
     let action = match action {
         Action::Available => return Ok(Reply::Available),
+        Action::Resume => {
+            let (ticket, endpoint, snapshot) = owner_service.resume(&caller, &binding).await?;
+            return Ok(Reply::Resumed {
+                ticket,
+                endpoint,
+                snapshot,
+            });
+        }
         Action::Current { ticket } => {
-            return run_owner(
-                &owner_service,
-                &ticket,
-                &caller,
-                &binding,
-                app,
-                &window,
-                Operation::Current,
-            )
-            .await;
+            let owner = owner_service.get_for_retirement(&ticket, &caller, &binding)?;
+            return owner
+                .current()
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::Create { ticket, minutes } if matches!(minutes, 1 | 5 | 10) => {
             return run_owner(
@@ -350,23 +359,18 @@ pub(crate) async fn remote_native_observer_setup(
                 .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::StopSharing { ticket } => {
-            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            let owner = owner_service.get_for_retirement(&ticket, &caller, &binding)?;
             return owner
                 .stop_sharing()
                 .await
                 .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::Revoke { ticket, target } => {
-            return run_owner(
-                &owner_service,
-                &ticket,
-                &caller,
-                &binding,
-                app,
-                &window,
-                Operation::Revoke(target),
-            )
-            .await;
+            let owner = owner_service.get_for_retirement(&ticket, &caller, &binding)?;
+            return owner
+                .revoke_existing(target, app, &window)
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
         }
         action @ (Action::Verify { .. }
         | Action::PublicRegistration { .. }

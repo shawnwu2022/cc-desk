@@ -47,6 +47,7 @@ export default {
   remotePairingInvite: "当前邀请",
   remotePairingExpires: "剩余 {time}",
   remotePairingExpired: "二维码已过期，请重新生成。",
+  remotePairingSetupExpired: "配对窗口已关闭，仍可停止共享或撤销设备。添加设备或开启新的共享前，请重新连接中转。",
   remotePairingQr: "在安卓手机上打开 CC Desk，扫描这个二维码。",
   remotePairingCode: "手动输入的配对码",
   remotePairingCancel: "取消邀请",

@@ -157,12 +157,13 @@ impl Owner {
         self.snapshot(&mut cache).await
     }
     pub(crate) async fn stop_sharing(&self) -> Result<Snapshot, SafeError> {
-        let mut cache = self
+        self.check_document()?;
+        let _mutation = self
             .state
             .try_lock()
             .map_err(|_| error("REMOTE_PAIRING_BUSY"))?;
         self.stop_share(None).await?;
-        self.snapshot(&mut cache).await
+        self.local_status().await
     }
     pub(super) async fn stop_share(&self, tunnel: Option<[u8; 16]>) -> Result<(), SafeError> {
         let mut slot = self.sharing.lock().await;
