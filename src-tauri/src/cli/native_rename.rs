@@ -5,6 +5,10 @@ use super::types::SafeError;
 pub(crate) mod claude;
 use serde::{Deserialize, Serialize};
 
+/// A remote operation rechecks the paired authority at the native provider's
+/// write boundary. Local WebView calls keep their existing admission.
+pub(crate) type RenameFence = std::sync::Arc<dyn Fn() -> Result<(), SafeError> + Send + Sync>;
+
 #[derive(Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RenameRequest {

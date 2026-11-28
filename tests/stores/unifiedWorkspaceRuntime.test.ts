@@ -27,8 +27,16 @@ import { useShellStore } from '@/stores/shell'
 import { useAttentionStore } from '@/stores/attention'
 import cmdHistoryCapture from '../fixtures/native-cli/codex-cmd-real-history.json'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), prepare: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), prepare: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn(), projectStateChange: vi.fn(), unlistenProjectState: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, nativePrepareOpencodeSession: io.prepare, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
+vi.mock('@tauri-apps/api/event', async original => ({
+  ...await original<object>(),
+  listen: async (name: string, callback: () => void) => {
+    if (name !== 'projects-state-changed') return () => {}
+    io.projectStateChange.mockImplementation(callback)
+    return io.unlistenProjectState
+  },
+}))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
   const profile = useCliProfilesStore().profile(profileId)!
@@ -64,6 +72,23 @@ function render() {
   const w = mount(defineComponent({ setup() { runtime = useUnifiedWorkspaceRuntime(ref(port)); return () => null } })); wrappers.push(w)
   return { runtime, port }
 }
+
+it('RemoteArchive_ReconcilesCanonicalDesktopStateAndUnregisters_001', async () => {
+  render()
+  await flushPromises()
+  const projects = useProjectsStateStore()
+  expect(projects.archivedSessions.get('/repo')).toBeUndefined()
+  persisted.archivedSessions = { '/repo': ['claude-id'] }
+  io.projectStateChange()
+  await flushPromises()
+  expect(projects.archivedSessions.get('/repo')).toEqual(['claude-id'])
+  persisted.archivedSessions = {}
+  io.projectStateChange()
+  await flushPromises()
+  expect(projects.archivedSessions.get('/repo')).toBeUndefined()
+  wrappers.pop()!.unmount()
+  expect(io.unlistenProjectState).toHaveBeenCalledOnce()
+})
 
 it('IndexRebuild_IsolatedReaderKeepsAppAndOldListOnPartial_066', async () => {
   const { useSessionIndexMaintenanceStore } = await import('@/stores/sessionIndexMaintenance')

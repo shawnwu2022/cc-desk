@@ -4182,5 +4182,247 @@
       "status": "pending",
       "required": "Fresh complete 255-case current-source CI with updateSnapshots none and maxDiffPixels 0."
     }
+  },
+  "rc7RemoteSettingsRevision": {
+    "sourceHead": "7c5d550f0c37ee58182f5642931ee3b95a09bea0",
+    "testedCommit": "fb780c5209031260ea6bb31ccb5b3a7ceabf5f5a",
+    "workflowRunId": "46047539621",
+    "artifactId": "15222484098",
+    "artifactZipSha256": "7d440119304e7611a063a4293f19264600015cda377ec933bcdc9b1766ba021b",
+    "environment": {
+      "sourceHead": "7c5d550f0c37ee58182f5642931ee3b95a09bea0",
+      "eventCommit": "fb780c5209031260ea6bb31ccb5b3a7ceabf5f5a",
+      "testedCommit": "fb780c5209031260ea6bb31ccb5b3a7ceabf5f5a",
+      "node": "v22.23.5",
+      "playwright": "1.63.0",
+      "browser": "Google Chrome for Testing 153.0.8010.12",
+      "platform": "ubuntu-24.04-linux-chromium",
+      "acceptance": "unreviewed; not Windows WebView2 or real CLI certification"
+    },
+    "approval": {
+      "scope": "Only these 13 reviewed images for moving Remote Connections from the sidebar into Settings",
+      "ownerApproved": true,
+      "pixelReview": "All 13 actual PNGs and difference regions inspected; 4,260 differing RGB pixels, confined to navigation."
+    },
+    "acceptedImages": [
+      {
+        "name": "archived-sessions.png",
+        "width": 1366,
+        "height": 768,
+        "sha256": "64eb9f3791f820a28d8eb5a2d455ea0a07805ebea808f8732dc1e9e652296b39",
+        "bytes": 50596,
+        "previousSha256": "318fecd25a931b5f1a16cfdc3a3c60bc59bd80848e45810a8aba4ba86c475817",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/archived-sessions.png",
+        "changedPixels": 135,
+        "differingBoundsPx": [
+          14,
+          115,
+          58,
+          138
+        ]
+      },
+      {
+        "name": "confirm-stop-and-archive.png",
+        "width": 1024,
+        "height": 640,
+        "sha256": "4ec4f484e5385431997da5af394f75e726f9919d5616ee38509cb5b791cc9e57",
+        "bytes": 56925,
+        "previousSha256": "5bb6e6f6cae6c4d625f227f6a63d5348e0c02bed4fd0def08b0e5cd7597f98f7",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/confirm-stop-and-archive.png",
+        "changedPixels": 135,
+        "differingBoundsPx": [
+          14,
+          115,
+          58,
+          138
+        ]
+      },
+      {
+        "name": "new-session-dialog.png",
+        "width": 1024,
+        "height": 640,
+        "sha256": "e0dcb9f2a75206ea540481db2232cf055ede5b27a83ff2c7cc8b0d8a3ffba26e",
+        "bytes": 66292,
+        "previousSha256": "603960d6a1b9761c07b65b2a4f3e3eccfd2731604c3dc06be50d3e291963ec3f",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/new-session-dialog.png",
+        "changedPixels": 135,
+        "differingBoundsPx": [
+          14,
+          115,
+          58,
+          138
+        ]
+      },
+      {
+        "name": "projects-150-percent.png",
+        "width": 1920,
+        "height": 1080,
+        "sha256": "2c74784b725e3d92e05e2adda461822a3c72a7f59e19570ccff9337b8d69537d",
+        "bytes": 59247,
+        "previousSha256": "c485d470626183b53526e8c3502b6834c56431d75a10a5006c840f5a4ffb93b7",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/projects-150-percent.png",
+        "changedPixels": 230,
+        "differingBoundsPx": [
+          21,
+          187,
+          45,
+          206
+        ]
+      },
+      {
+        "name": "settings-launch-configurations.png",
+        "width": 1280,
+        "height": 720,
+        "sha256": "be3e9b7410ffddb8ba868085df9829257c4ac94a3f6797f3a09694b43d462515",
+        "bytes": 78157,
+        "previousSha256": "eb5c1cbfcb9ba19e6b666d126ddf986b1c96bfc8becef5f68d7a91f40aa1f8da",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/settings-launch-configurations.png",
+        "changedPixels": 1115,
+        "differingBoundsPx": [
+          14,
+          124,
+          118,
+          364
+        ]
+      },
+      {
+        "name": "settings-terminal-light-gui-dark-terminal.png",
+        "width": 1440,
+        "height": 900,
+        "sha256": "270da9cee256d7f239d7350e72fcc0f6386e76da04b9749f0f46b2624ad8db96",
+        "bytes": 86919,
+        "previousSha256": "b7507b6ccee1c0c0dc38e0a5ba9736fcae76e28efa2ea5c17f22a584ae446878",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/settings-terminal-light-gui-dark-terminal.png",
+        "changedPixels": 1577,
+        "differingBoundsPx": [
+          14,
+          124,
+          192,
+          362
+        ]
+      },
+      {
+        "name": "tooltip-transformed-1024.png",
+        "width": 1024,
+        "height": 640,
+        "sha256": "f18cdbf5ec87014c4b704f33de98641cef7597285b25d37f522888712df68122",
+        "bytes": 49253,
+        "previousSha256": "fb8d4a36bd90cedf35a5207856a262f0b4526fd4a3c2f8debe885b43072d6f2d",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/tooltip-transformed-1024.png",
+        "changedPixels": 135,
+        "differingBoundsPx": [
+          14,
+          115,
+          58,
+          138
+        ]
+      },
+      {
+        "name": "workspace-dark-gui-light-terminal.png",
+        "width": 1280,
+        "height": 720,
+        "sha256": "18621e0a9b34df0929464425efd421f5f04413250f7d1551a8f9fc873ccbca08",
+        "bytes": 59998,
+        "previousSha256": "f339c6e3e5ca95e921e7263c44924b16b31177d1849183b2f2cafb71188ee575",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/workspace-dark-gui-light-terminal.png",
+        "changedPixels": 132,
+        "differingBoundsPx": [
+          14,
+          124,
+          30,
+          138
+        ]
+      },
+      {
+        "name": "workspace-empty-1024-zh.png",
+        "width": 1024,
+        "height": 640,
+        "sha256": "7d2b83c160689c77fd60de402beec613d017d5e5ddcbb521f65df029976f42c5",
+        "bytes": 27304,
+        "previousSha256": "14b5c714ebb95d4b294de80ec04e125cfcf927ae62b0afea3b5f533fe565febf",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/workspace-empty-1024-zh.png",
+        "changedPixels": 135,
+        "differingBoundsPx": [
+          14,
+          115,
+          58,
+          138
+        ]
+      },
+      {
+        "name": "workspace-hover-action-1366-en.png",
+        "width": 1366,
+        "height": 768,
+        "sha256": "4709024488dbef642a4f2872e50d0e1306800b24985c6412f0a303c3398648dc",
+        "bytes": 62132,
+        "previousSha256": "ace73ac1c33dc29f5e942e02814775135df0757bbf9ad169363190bb33d557b7",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/workspace-hover-action-1366-en.png",
+        "changedPixels": 132,
+        "differingBoundsPx": [
+          14,
+          124,
+          30,
+          138
+        ]
+      },
+      {
+        "name": "workspace-menu-1024-en.png",
+        "width": 1024,
+        "height": 640,
+        "sha256": "54e9c20557e7c3c8b9df5b110cf620898295d5f79ac43485b4dbcc3110e43162",
+        "bytes": 58975,
+        "previousSha256": "12ca2c57ca6e5977a56049d0975fca12d38c2e46c4d4ee78cc70b21c9b1305ad",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/workspace-menu-1024-en.png",
+        "changedPixels": 132,
+        "differingBoundsPx": [
+          14,
+          124,
+          30,
+          138
+        ]
+      },
+      {
+        "name": "workspace-mixed-1366-zh.png",
+        "width": 1366,
+        "height": 768,
+        "sha256": "3ff0a78e7bb5e8da93996f16edff263d5c68a2bfc2c310e0757ccddcb4efb483",
+        "bytes": 60143,
+        "previousSha256": "a2bd44c34e7bcb5146c38ee5a4bf9b94d058339ddf6452537ea373026a3a7995",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/workspace-mixed-1366-zh.png",
+        "changedPixels": 132,
+        "differingBoundsPx": [
+          14,
+          124,
+          30,
+          138
+        ]
+      },
+      {
+        "name": "workspace-resources-overlay-1024.png",
+        "width": 1024,
+        "height": 640,
+        "sha256": "0d69b2dcd21e30f3df138680f565ce6aa0c8113bf24b141e1402213febe3c211",
+        "bytes": 68188,
+        "previousSha256": "6963f65121ee67af5ffb7616dc446e904135ee6b8bcc7cc29f4400ed6706f547",
+        "zipEntry": "visual-evidence/candidate-baselines-unapproved/workspace-resources-overlay-1024.png",
+        "changedPixels": 135,
+        "differingBoundsPx": [
+          14,
+          115,
+          58,
+          138
+        ]
+      }
+    ],
+    "verificationBeforeBaselineAcceptance": {
+      "total": 255,
+      "passed": 242,
+      "changedSnapshotFailures": 13,
+      "status": "failed; retained RED"
+    },
+    "finalNoUpdateVerification": {
+      "status": "pending",
+      "required": "Fresh full 255-case zero-diff CI on the updated source with updateSnapshots none."
+    }
   }
 }

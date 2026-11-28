@@ -6,7 +6,7 @@ import java.util.UUID;
 
 /** Internal app contract. No DTO in this file is a wire format or authorization token. */
 interface DesktopBackend {
-    enum State { DISCONNECTED, WAITING_FOR_DESKTOP, LOADING_SHARES, SHARES_READY, AWAITING_OBSERVER, OBSERVING, CONTROLLING, REVOKED, UNAVAILABLE }
+    enum State { DISCONNECTED, WAITING_FOR_DESKTOP, LOADING_SHARES, SHARES_READY, CATALOGUE_READY, MANAGEMENT_READY, MANAGEMENT_WAITING, MANAGEMENT_VIEWING, AWAITING_OBSERVER, OBSERVING, CONTROLLING, REVOKED, UNAVAILABLE }
 
     interface IdentityProvider {
         HardwareIdentity open(UUID localId, HardwareIdentity.Usage usage) throws Exception;

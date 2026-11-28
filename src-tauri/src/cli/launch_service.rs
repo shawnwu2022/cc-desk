@@ -33,18 +33,120 @@ pub(crate) struct FrozenPty {
     #[cfg(all(windows, feature = "remote-host"))]
     pub(crate) managed_job: Option<Arc<crate::platform::owned_job_launch::ManagedJob>>,
     pub(crate) snapshot: Arc<LaunchSnapshot>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) catalogue_opencode_identity: Option<Arc<OpencodeCatalogueIdentity>>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) catalogue_claude_identity: Option<Arc<ClaudeCatalogueIdentity>>,
     pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
     pub(crate) observer_failure: Option<&'static str>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    codex_catalogue_identity:
+        Option<Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>>,
 }
 pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
 struct OpencodePreparation {
     owner: CallerIdentity,
     request: LaunchRequest,
     result: Mutex<Option<Result<String, SafeError>>>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    catalogue_source: Mutex<Option<super::source_provenance::SourceProvenance>>,
     settled: Condvar,
 }
 
 /// 路径和 API 代次只属于本次已完成且通过来源校验的探测。
+#[cfg(all(windows, feature = "remote-observer"))]
+pub(crate) struct OpencodeCatalogueIdentity {
+    pub(crate) native_session_id: String,
+    source: super::native_projection::scoped_fs::Root,
+    project: super::native_projection::scoped_fs::Root,
+}
+#[cfg(all(windows, feature = "remote-observer"))]
+impl OpencodeCatalogueIdentity {
+    pub(crate) fn current_keys(&self) -> Option<(&str, &str)> {
+        self.source.source_current().ok()?;
+        self.project.source_current().ok()?;
+        Some((self.source.key(), self.project.key()))
+    }
+}
+#[cfg(all(windows, feature = "remote-observer"))]
+fn prepared_opencode_matches(original: &LaunchRequest, actual: &LaunchRequest, id: &str) -> bool {
+    if original.cli != CliKind::Opencode
+        || original.action != LaunchAction::New
+        || !original.extra_args.is_empty()
+        || !matches!(&actual.action, LaunchAction::ResumeId {native_session_id} if native_session_id == id)
+    {
+        return false;
+    }
+    let mut expected = original.clone();
+    expected.action = actual.action.clone();
+    // The connected terminal, rather than the prepare call, owns viewport size.
+    expected.cols = actual.cols;
+    expected.rows = actual.rows;
+    &expected == actual
+}
+
+#[cfg(all(windows, feature = "remote-observer"))]
+pub(crate) struct ClaudeCatalogueIdentity {
+    expected: uuid::Uuid,
+    cwd: String,
+    project: super::native_projection::scoped_fs::Root,
+    state: std::sync::atomic::AtomicU8,
+}
+#[cfg(all(windows, feature = "remote-observer"))]
+impl ClaudeCatalogueIdentity {
+    fn new(expected: uuid::Uuid, cwd: &str) -> Option<Self> {
+        Some(Self {
+            expected,
+            cwd: cwd.to_owned(),
+            project: super::native_projection::scoped_fs::Root::open(std::path::Path::new(cwd))
+                .ok()?,
+            state: Default::default(),
+        })
+    }
+
+    const PENDING: u8 = 0;
+    const CONFIRMED: u8 = 1;
+    const RETIRED: u8 = 2;
+
+    // 仅处理原运行已认证的 hook 元数据，不打开 hook 提供的路径。
+    pub(crate) fn observe(&self, event: &serde_json::Value) {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+        let cwd = event["cwd"]
+            .as_str()
+            .filter(|cwd| !cwd.is_empty())
+            .map(|cwd| std::path::Path::new(cwd) == std::path::Path::new(&self.cwd));
+        let id = event["session_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(|id| uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed == self.expected));
+        if cwd == Some(false) || id == Some(false) {
+            // 身份一旦冲突，后续迟到的旧事件不可重新启用此绑定。
+            self.state.store(Self::RETIRED, Release);
+        } else if cwd == Some(true)
+            && event["hook_event_name"] == "SessionStart"
+            && event["source"] == "startup"
+            && event["session_id"].as_str() == Some(self.expected.to_string().as_str())
+        {
+            let _ = self
+                .state
+                .compare_exchange(Self::PENDING, Self::CONFIRMED, AcqRel, Acquire);
+        }
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::Acquire) == Self::CONFIRMED
+    }
+
+    pub(crate) fn current(&self) -> Option<(uuid::Uuid, &str)> {
+        if !self.is_current() {
+            return None;
+        }
+        self.project.source_current().ok()?;
+        self.is_current()
+            .then(|| (self.expected, self.project.key()))
+    }
+}
+
 struct OpencodeDatabaseProbe {
     output: String,
     flavor: ApiFlavor,
@@ -189,6 +291,7 @@ impl LaunchService {
         request: &super::opencode_archive::Request,
         authority: super::native_projection::registry::SessionAuthority,
         pinned: super::opencode_archive::PinnedSource,
+        fence: Option<super::native_rename::RenameFence>,
     ) -> Result<(), SafeError> {
         let expires = Instant::now() + Duration::from_secs(35);
         let service = self.clone();
@@ -196,7 +299,7 @@ impl LaunchService {
         let request = request.clone();
         // OS 收口未知不无限阻塞 IPC；真正 owner 在后台继续持有来源/冻结和子进程。
         super::opencode_archive::owned(Duration::from_secs(35), move || {
-            service.set_opencode_archive_owned(&caller, &request, authority, pinned, expires)
+            service.set_opencode_archive_owned(&caller, &request, authority, pinned, expires, fence)
         })
     }
     #[cfg(windows)]
@@ -207,8 +310,12 @@ impl LaunchService {
         authority: super::native_projection::registry::SessionAuthority,
         pinned: super::opencode_archive::PinnedSource,
         expires: Instant,
+        fence: Option<super::native_rename::RenameFence>,
     ) -> Result<(), SafeError> {
         {
+            if let Some(check) = &fence {
+                check()?;
+            }
             self.registry().check_caller(caller)?;
             let profile = self.repository.get_profile(&request.source.profile_id)?;
             if profile.revision != request.source.profile_revision {
@@ -266,6 +373,9 @@ impl LaunchService {
                             request.archived,
                             &|| {
                                 super::opencode_archive::before_deadline(expires, || {
+                                    if let Some(check) = &fence {
+                                        check()?;
+                                    }
                                     if *self.shutting_down.read() {
                                         return Err(error("RUN_SUPERVISOR_STOPPING"));
                                     }
@@ -497,8 +607,12 @@ impl LaunchService {
         request: &LaunchRequest,
         authority: super::native_projection::registry::SessionAuthority,
         trace: Option<super::activity_diagnostics::Trace>,
+        fence: Option<super::native_rename::RenameFence>,
     ) -> Result<(), SafeError> {
         // 此准备段只冻结和验证输入，尚未创建原生进程，失败不能误报已发送归档。
+        if let Some(check) = &fence {
+            check()?;
+        }
         let (spec, frozen, mut admission, archive_owners) = (|| -> Result<_, SafeError> {
             self.registry().check_caller(caller)?;
             let profile = self.repository.get_profile(&request.profile_id)?;
@@ -556,6 +670,9 @@ impl LaunchService {
                 if *shutdown {
                     return Err(error("RUN_SUPERVISOR_STOPPING"));
                 }
+                if let Some(check) = &fence {
+                    check()?;
+                }
                 registry.check_caller(&caller)?;
                 authority.current()?;
                 let mut command = spec.metadata_command()?;
@@ -593,6 +710,9 @@ impl LaunchService {
                         let current = || {
                             if *shutting_down.read() {
                                 return Err(error("RUN_SUPERVISOR_STOPPING"));
+                            }
+                            if let Some(check) = &fence {
+                                check()?;
                             }
                             registry.check_caller(&caller)?;
                             authority.current()?;
@@ -695,6 +815,21 @@ impl LaunchService {
         title: String,
         trace: Option<super::activity_diagnostics::Trace>,
     ) -> Result<(), SafeError> {
+        self.rename_metadata_guarded(caller, request, authority, title, trace, None)
+    }
+
+    pub(crate) fn rename_metadata_guarded(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        authority: super::native_projection::registry::RenameAuthority,
+        title: String,
+        trace: Option<super::activity_diagnostics::Trace>,
+        fence: Option<super::native_rename::RenameFence>,
+    ) -> Result<(), SafeError> {
+        if let Some(check) = &fence {
+            check()?;
+        }
         self.registry().check_caller(caller)?;
         let profile = self.repository.get_profile(&request.profile_id)?;
         let legacy =
@@ -759,6 +894,9 @@ impl LaunchService {
                 if *self.shutting_down.read() {
                     return Err(error("RUN_SUPERVISOR_STOPPING"));
                 }
+                if let Some(check) = &fence {
+                    check()?;
+                }
                 self.registry().check_caller(caller)?;
                 authority.verify_opencode_source()
             };
@@ -813,6 +951,9 @@ impl LaunchService {
                     if *shutdown {
                         return Err(error("RUN_SUPERVISOR_STOPPING"));
                     }
+                    if let Some(check) = &fence {
+                        check()?;
+                    }
                     registry.check_caller(&caller)?;
                     authority.current()?;
                     let mut command = if let Some(command) = claude_command {
@@ -838,6 +979,9 @@ impl LaunchService {
                         let current = || {
                             if *shutting_down.read() {
                                 return Err(error("RUN_SUPERVISOR_STOPPING"));
+                            }
+                            if let Some(check) = &fence {
+                                check()?;
                             }
                             registry.check_caller(&caller)
                         };
@@ -955,6 +1099,8 @@ impl LaunchService {
                     owner: caller.clone(),
                     request: request.clone(),
                     result: Mutex::new(None),
+                    #[cfg(all(windows, feature = "remote-observer"))]
+                    catalogue_source: Mutex::new(None),
                     settled: Condvar::new(),
                 });
                 preparations.push(preparation.clone());
@@ -1011,6 +1157,28 @@ impl LaunchService {
             )?;
             let invocation = build_invocation(&server_request, &snapshot)?;
             let spec = resolve_process(&invocation)?;
+            #[cfg(all(windows, feature = "remote-observer"))]
+            let witness = (|| {
+                let terminal = EnvMap::new();
+                let structured = freeze_launch(
+                    request,
+                    &profile,
+                    caller,
+                    &FreezeContext {
+                        inherited: &inherited,
+                        terminal: &terminal,
+                        legacy: legacy.as_ref(),
+                        observer: None,
+                    },
+                )
+                .ok()?;
+                if structured.environment() != snapshot.environment() {
+                    return None;
+                }
+                let (provenance, _) = self.freeze_run_source(caller, &structured, &terminal);
+                provenance.selection().ok()?;
+                Some(provenance)
+            })();
             let (admission, owner) = self.admit_owned_command()?;
             let result = super::opencode_prepare::create_session(
                 &spec,
@@ -1021,6 +1189,10 @@ impl LaunchService {
             );
             let mut owner = owner;
             owner.settled = true;
+            #[cfg(all(windows, feature = "remote-observer"))]
+            if result.is_ok() {
+                *preparation.catalogue_source.lock() = witness.filter(|v| v.selection().is_ok());
+            }
             result
         }))
         .unwrap_or_else(|_| Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN")));
@@ -1029,6 +1201,52 @@ impl LaunchService {
         current()?;
         result
     }
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn catalogue_opencode_identity(
+        &self,
+        caller: &CallerIdentity,
+        actual: &LaunchSnapshot,
+        provenance: &super::source_provenance::SourceProvenance,
+    ) -> Option<OpencodeCatalogueIdentity> {
+        use super::native_projection::scoped_fs::Root;
+        let request = actual.request();
+        if provenance.cli != CliKind::Opencode
+            || !matches!(request.action, LaunchAction::ResumeId { .. })
+        {
+            return None;
+        }
+        let preparation = self
+            .opencode_preparations
+            .lock()
+            .iter()
+            .find(|entry| entry.owner == *caller && entry.request.request_id == request.request_id)?
+            .clone();
+        let id = preparation.result.lock().as_ref()?.as_ref().ok()?.clone();
+        if !prepared_opencode_matches(&preparation.request, request, &id) {
+            return None;
+        }
+        let prepared = preparation.catalogue_source.lock();
+        let prepared = prepared.as_ref()?;
+        if prepared.cli != provenance.cli
+            || prepared.profile_id != provenance.profile_id
+            || prepared.profile_revision != provenance.profile_revision
+        {
+            return None;
+        }
+        let expected = prepared.selection().ok()?;
+        let live = provenance.selection().ok()?;
+        let project = expected.project.as_ref()?;
+        let launch_project = Root::open(std::path::Path::new(&request.launch_cwd)).ok()?;
+        if expected.root.key() != live.root.key() || project.key() != launch_project.key() {
+            return None;
+        }
+        Some(OpencodeCatalogueIdentity {
+            native_session_id: id,
+            source: expected.root.clone_source().ok()?,
+            project: project.clone_source().ok()?,
+        })
+    }
+
     pub(crate) fn probe_opencode_database(
         &self,
         caller: &CallerIdentity,
@@ -1282,6 +1500,8 @@ impl LaunchService {
         // synchronously round-trip through the Tauri main event loop.
         let handoff_guard = RefCell::new(None);
         let opencode_cue = RefCell::new(None);
+        #[cfg(all(windows, feature = "remote-observer"))]
+        let opencode_identity = RefCell::new(None);
         let spawned = Cell::new(false);
         // This route owns the xterm frontend and PTY, independently of the
         // desktop launcher's terminal. Explicit profile env still wins in D08.
@@ -1392,6 +1612,8 @@ impl LaunchService {
                             }
                         }
                     });
+                #[cfg(all(windows, feature = "remote-observer"))]
+                let mut claude_catalogue = None;
                 let (snapshot, observer) = match prepared {
                     Some((host, prepared, authorize_cue)) => {
                         let overlaid = if let Some(plugin) = &prepared.opencode_plugin {
@@ -1408,6 +1630,25 @@ impl LaunchService {
                         // 可选覆盖必须能由已选择的 runner 完整表示；失败仅撤销覆盖，
                         // 原始快照仍走同一严格校验，不能放宽 cmd 转义或更换启动器。
                         let overlaid = overlaid.and_then(|next| {
+                            #[cfg(all(windows, feature = "remote-observer"))]
+                            let next = {
+                                let id = uuid::Uuid::new_v4();
+                                let prepared_identity =
+                                    next.with_claude_catalogue_id(id).and_then(|candidate| {
+                                        let proof = Arc::new(ClaudeCatalogueIdentity::new(
+                                            id,
+                                            &next.request().launch_cwd,
+                                        )?);
+                                        prepared.lease.bind_claude_catalogue(proof.clone()).ok()?;
+                                        Some((candidate, proof))
+                                    });
+                                if let Some((candidate, proof)) = prepared_identity {
+                                    claude_catalogue = Some(proof);
+                                    candidate
+                                } else {
+                                    next
+                                }
+                            };
                             let invocation = build_invocation(next.request(), &next)?;
                             resolve_process(&invocation)?;
                             if let Some(args) = &prepared.codex_args {
@@ -1461,8 +1702,8 @@ impl LaunchService {
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
-                if let Some(identity) = codex_identity {
-                    admission.identify_codex(identity);
+                if let Some(identity) = &codex_identity {
+                    admission.identify_codex(identity.clone());
                 } else if !matches!(frozen.request().action, LaunchAction::Raw { .. }) {
                     admission.identify_cli(frozen.request().cli);
                 }
@@ -1514,12 +1755,26 @@ impl LaunchService {
                     #[cfg(all(windows, feature = "remote-host"))]
                     managed_job,
                     snapshot: frozen,
+                    #[cfg(all(windows, feature = "remote-observer"))]
+                    catalogue_opencode_identity: opencode_identity
+                        .borrow_mut()
+                        .take()
+                        .map(Arc::new),
+                    #[cfg(all(windows, feature = "remote-observer"))]
+                    catalogue_claude_identity: observer.as_ref().and(claude_catalogue),
                     observer,
                     observer_failure,
+                    #[cfg(all(windows, feature = "remote-observer"))]
+                    codex_catalogue_identity: codex_identity,
                 })
             },
             |snapshot| {
                 let (source, cue) = self.freeze_run_source(caller, snapshot, &terminal);
+                #[cfg(all(windows, feature = "remote-observer"))]
+                {
+                    *opencode_identity.borrow_mut() =
+                        self.catalogue_opencode_identity(caller, snapshot, &source);
+                }
                 *opencode_cue.borrow_mut() = cue;
                 source
             },
@@ -1544,6 +1799,27 @@ impl LaunchService {
             }
             if !matches!(adopted, Ok(Ok(()))) {
                 return Err(error("RUN_HANDOFF_FAILED"));
+            }
+            #[cfg(all(windows, feature = "remote-observer"))]
+            if let Some(identity) = &resource.process.codex_catalogue_identity {
+                self.registry()
+                    .record_catalogue_adoption(&status.run, &resource, identity.clone());
+            }
+            #[cfg(all(windows, feature = "remote-observer"))]
+            if let Some(identity) = &resource.process.catalogue_claude_identity {
+                self.registry().record_claude_catalogue_adoption(
+                    &status.run,
+                    &resource,
+                    identity.clone(),
+                );
+            }
+            #[cfg(all(windows, feature = "remote-observer"))]
+            if let Some(identity) = &resource.process.catalogue_opencode_identity {
+                self.registry().record_opencode_catalogue_adoption(
+                    &status.run,
+                    &resource,
+                    identity.clone(),
+                );
             }
         }
         handoff_guard.borrow_mut().take();
@@ -1617,6 +1893,19 @@ impl LaunchService {
         request: &LaunchRequest,
         trace: Option<super::activity_diagnostics::Trace>,
     ) -> Result<(), SafeError> {
+        self.run_command_guarded(caller, request, trace, None)
+    }
+
+    pub(crate) fn run_command_guarded(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        trace: Option<super::activity_diagnostics::Trace>,
+        guard: Option<(String, super::native_rename::RenameFence)>,
+    ) -> Result<(), SafeError> {
+        if let Some((_, check)) = &guard {
+            check()?;
+        }
         self.registry().check_caller(caller)?;
         if *self.shutting_down.read() {
             return Err(error("RUN_SUPERVISOR_STOPPING"));
@@ -1637,6 +1926,27 @@ impl LaunchService {
                 observer: None,
             },
         )?;
+        if let Some((root, check)) = &guard {
+            if request.cli != CliKind::Codex
+                || !matches!(&request.action, LaunchAction::Unarchive { .. })
+                || !snapshot.default_args().is_empty()
+                || snapshot
+                    .legacy_default_args()
+                    .is_some_and(|args| !args.is_empty())
+                || !snapshot.extra_args().is_empty()
+            {
+                return Err(error("ARCHIVE_ARGUMENTS_UNSUPPORTED"));
+            }
+            let selected =
+                super::native_projection::selection::locations(request.cli, snapshot.environment())
+                    .map_err(error)?;
+            let held = selected.open_root(CliKind::Codex).map_err(error)?;
+            if held.key() != root {
+                return Err(error("SCOPE_STALE"));
+            }
+            held.source_current().map_err(error)?;
+            check()?;
+        }
         let invocation = build_invocation(request, &snapshot)?;
         let spec = resolve_process(&invocation)?;
         let mut admission = self.admit_start()?;
@@ -1691,6 +2001,13 @@ impl LaunchService {
                         return;
                     }
                 };
+                if let Some((_, check)) = &guard {
+                    if let Err(failure) = check() {
+                        command_owner.settled = true;
+                        reply(Err(failure));
+                        return;
+                    }
+                }
                 let pty = match OwnedPty::spawn_admitted(&spec, size, admission.begin_creation()) {
                     Ok(pty) => pty,
                     Err(failure) => {
@@ -2213,6 +2530,115 @@ mod opencode_probe_tests;
 #[cfg(test)]
 mod owned_command_tests {
     use super::*;
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[test]
+    fn claude_catalogue_requires_authenticated_startup_for_fresh_id_and_project() {
+        let project = tempfile::tempdir().unwrap();
+        let cwd = project.path().to_str().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let startup = serde_json::json!({
+            "hook_event_name": "SessionStart", "source": "startup",
+            "cwd": cwd, "session_id": id.to_string(),
+        });
+        for (key, val) in [
+            ("source", serde_json::json!("resume")),
+            ("hook_event_name", serde_json::json!("Notification")),
+            ("cwd", serde_json::json!("different-directory")),
+            (
+                "session_id",
+                serde_json::json!(uuid::Uuid::new_v4().to_string()),
+            ),
+        ] {
+            let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+            assert!(proof.current().is_none());
+            let mut wrong = startup.clone();
+            wrong[key] = val;
+            proof.observe(&wrong);
+            assert!(proof.current().is_none());
+        }
+        let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+        proof.observe(&startup);
+        assert_eq!(proof.current().map(|(id, _)| id), Some(id));
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[test]
+    fn claude_catalogue_conflict_retires_original_binding_without_rebinding() {
+        let project = tempfile::tempdir().unwrap();
+        let cwd = project.path().to_str().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let startup = serde_json::json!({
+            "hook_event_name": "SessionStart", "source": "startup",
+            "cwd": cwd, "session_id": id.to_string(),
+        });
+        for (field, value) in [
+            (
+                "session_id",
+                serde_json::json!(uuid::Uuid::new_v4().to_string()),
+            ),
+            ("cwd", serde_json::json!("different-directory")),
+        ] {
+            let proof = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+            proof.observe(&startup);
+            assert!(proof.current().is_some());
+            proof.observe(&serde_json::json!({"hook_event_name": "Notification"}));
+            assert!(proof.current().is_some());
+
+            let mut switched = startup.clone();
+            switched["source"] = serde_json::json!("resume");
+            switched[field] = value;
+            proof.observe(&switched);
+            assert!(proof.current().is_none());
+            proof.observe(&startup);
+            assert!(proof.current().is_none());
+
+            // 冲突先抵达时，迟到的启动事件也不能激活旧绑定。
+            let pending = ClaudeCatalogueIdentity::new(id, cwd).unwrap();
+            pending.observe(&switched);
+            pending.observe(&startup);
+            assert!(pending.current().is_none());
+        }
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    #[test]
+    fn opencode_catalogue_prepared_identity_resolves_only_the_original_launch() {
+        let created = LaunchRequest {
+            request_id: "request-a".into(),
+            tab_id: "tab-a".into(),
+            run_id: "run-a".into(),
+            generation: 1,
+            profile_id: "profile-a".into(),
+            expected_profile_revision: crate::cli::types::WireU64::parse("1").unwrap(),
+            cli: CliKind::Opencode,
+            launch_cwd: "fixture-project".into(),
+            action: LaunchAction::New,
+            extra_args: vec![],
+            cols: 80,
+            rows: 24,
+        };
+        let mut resume = created.clone();
+        resume.action = LaunchAction::ResumeId {
+            native_session_id: "ses_owned".into(),
+        };
+        resume.cols = 121;
+        assert!(prepared_opencode_matches(&created, &resume, "ses_owned"));
+        assert!(!prepared_opencode_matches(&created, &resume, "ses_other"));
+        assert!(!prepared_opencode_matches(&created, &created, "ses_owned"));
+        let mut changed = resume.clone();
+        changed.generation += 1;
+        assert!(!prepared_opencode_matches(&created, &changed, "ses_owned"));
+        changed = resume.clone();
+        changed.launch_cwd = "unrelated-project".into();
+        assert!(!prepared_opencode_matches(&created, &changed, "ses_owned"));
+        changed = resume.clone();
+        changed.profile_id = "different-profile".into();
+        assert!(!prepared_opencode_matches(&created, &changed, "ses_owned"));
+        changed = resume;
+        changed.extra_args.push("--fixture".into());
+        assert!(!prepared_opencode_matches(&created, &changed, "ses_owned"));
+    }
     #[cfg(feature = "remote-host")]
     #[test]
     #[allow(non_snake_case)]

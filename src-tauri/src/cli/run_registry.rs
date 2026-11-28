@@ -50,6 +50,109 @@ pub(crate) struct LaunchStatus {
     pub(crate) failure: Option<LaunchFailure>,
 }
 
+#[cfg(all(windows, feature = "remote-observer"))]
+#[derive(PartialEq, Eq)]
+pub(crate) enum CatalogueNativeId {
+    Codex(uuid::Uuid),
+    Opencode(String),
+    Claude(uuid::Uuid),
+}
+
+#[cfg(all(windows, feature = "remote-observer"))]
+struct VerifiedCatalogueRun {
+    native: CatalogueNativeId,
+    project: Option<String>,
+    status: LaunchStatus,
+}
+
+#[cfg(all(windows, feature = "remote-observer"))]
+fn unique_management_run(
+    runs: impl IntoIterator<Item = VerifiedCatalogueRun>,
+    native: &CatalogueNativeId,
+    project: &str,
+) -> Option<LaunchStatus> {
+    let mut exact = runs.into_iter().filter(|run| &run.native == native);
+    let run = exact.next()?;
+    if run.project.as_deref() != Some(project) || exact.next().is_some() {
+        return None;
+    }
+    Some(run.status)
+}
+
+#[cfg(all(test, windows, feature = "remote-observer"))]
+mod management_target_tests {
+    use super::*;
+
+    fn candidate(id: &str, project: Option<&str>, generation: u32) -> VerifiedCatalogueRun {
+        VerifiedCatalogueRun {
+            native: CatalogueNativeId::Opencode(id.into()),
+            project: project.map(str::to_owned),
+            status: LaunchStatus {
+                instance_id: "instance".into(),
+                request_id: format!("request-{generation}"),
+                run: RunKey {
+                    run_id: format!("run-{generation}"),
+                    generation,
+                },
+                revision: WireU64::parse("2").unwrap(),
+                phase: LaunchPhase::Running,
+                failure: None,
+            },
+        }
+    }
+
+    #[test]
+    fn original_management_target_keeps_exact_request_and_generation() {
+        let id = CatalogueNativeId::Opencode("exact".into());
+        let selected = unique_management_run(
+            [
+                candidate("other", Some("project"), 1),
+                candidate("exact", Some("project"), 3),
+            ],
+            &id,
+            "project",
+        )
+        .unwrap();
+        assert_eq!(selected.run.generation, 3);
+        assert_eq!(selected.run.run_id, "run-3");
+        assert_eq!(selected.request_id, "request-3");
+        assert_eq!(selected.phase, LaunchPhase::Running);
+    }
+
+    #[test]
+    fn original_management_target_never_guesses_project_or_chooses_a_duplicate() {
+        let id = CatalogueNativeId::Opencode("same".into());
+        assert!(unique_management_run([candidate("same", None, 1)], &id, "project").is_none());
+        assert!(
+            unique_management_run([candidate("same", Some("other"), 1)], &id, "project").is_none()
+        );
+        assert!(unique_management_run(
+            [
+                candidate("same", Some("project"), 1),
+                candidate("same", Some("project"), 2)
+            ],
+            &id,
+            "project",
+        )
+        .is_none());
+        assert!(unique_management_run(
+            [
+                candidate("same", Some("project"), 1),
+                candidate("same", Some("other"), 2)
+            ],
+            &id,
+            "project",
+        )
+        .is_none());
+        let codex = uuid::Uuid::new_v4();
+        let mut row = candidate("unused", Some("project"), 1);
+        row.native = CatalogueNativeId::Codex(codex);
+        assert!(
+            unique_management_run([row], &CatalogueNativeId::Claude(codex), "project").is_none()
+        );
+    }
+}
+
 type RequestKey = (u64, String);
 
 struct Record<R> {
@@ -58,12 +161,28 @@ struct Record<R> {
     status: LaunchStatus,
     resource: Option<Arc<R>>,
     source: Option<Arc<super::source_provenance::SourceProvenance>>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    catalogue_identity:
+        Option<Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    catalogue_opencode: Option<Arc<super::launch_service::OpencodeCatalogueIdentity>>,
+    #[cfg(all(windows, feature = "remote-observer"))]
+    catalogue_claude: Option<Arc<super::launch_service::ClaudeCatalogueIdentity>>,
     in_flight: bool,
     retired: bool,
     eviction_ready: bool,
 }
 
 impl<R> Record<R> {
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn catalogue_eligible(&self) -> bool {
+        !self.in_flight
+            && matches!(
+                (self.status.phase, self.retired),
+                (LaunchPhase::Running, false) | (LaunchPhase::Exited, true)
+            )
+    }
+
     fn transition(&mut self, phase: LaunchPhase, failure: Option<LaunchFailure>) {
         if self.status.phase == phase && self.status.failure == failure {
             return;
@@ -314,6 +433,12 @@ impl<R> RunRegistry<R> {
                 status,
                 resource: None,
                 source: None,
+                #[cfg(all(windows, feature = "remote-observer"))]
+                catalogue_identity: None,
+                #[cfg(all(windows, feature = "remote-observer"))]
+                catalogue_opencode: None,
+                #[cfg(all(windows, feature = "remote-observer"))]
+                catalogue_claude: None,
                 in_flight: true,
                 retired: false,
                 eviction_ready: false,
@@ -552,6 +677,394 @@ impl<R> RunRegistry<R> {
             .resource
             .clone()
             .ok_or_else(|| error("RUN_NOT_READY"))
+    }
+
+    /// Published only after adoption of the exact original resource.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn record_catalogue_adoption(
+        &self,
+        run: &RunKey,
+        resource: &Arc<R>,
+        identity: Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>,
+    ) {
+        let mut state = self.state.lock();
+        let Some(key) = state.runs.get(&run.run_id).cloned() else {
+            return;
+        };
+        let Some(record) = state.records.get_mut(&key) else {
+            return;
+        };
+        if record.status.run == *run
+            && record.catalogue_identity.is_none()
+            && record
+                .resource
+                .as_ref()
+                .is_some_and(|held| Arc::ptr_eq(held, resource))
+        {
+            record.catalogue_identity = Some(identity);
+        }
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn codex_catalogue_runs(
+        &self,
+        caller: &CallerIdentity,
+        profile_id: &str,
+        revision: WireU64,
+        root: &str,
+    ) -> Result<Vec<VerifiedCatalogueRun>, SafeError> {
+        let candidates = {
+            let state = self.state.lock();
+            self.authorize(&state, caller)?;
+            state
+                .records
+                .values()
+                .filter_map(|record| {
+                    if record.owner != *caller || !record.catalogue_eligible() {
+                        return None;
+                    }
+                    let source = record.source.as_ref()?;
+                    if source.cli != super::types::CliKind::Codex
+                        || source.profile_id != profile_id
+                        || source.profile_revision != revision
+                    {
+                        return None;
+                    }
+                    Some((
+                        record.status.clone(),
+                        source.clone(),
+                        record.catalogue_identity.as_ref()?.clone(),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut verified = Vec::new();
+        for (status, source, identity) in candidates {
+            let Ok(selection) = source.selection() else {
+                continue;
+            };
+            if selection.root.key() != root {
+                continue;
+            }
+            let Some(id) = identity.catalogue_primary() else {
+                continue;
+            };
+            {
+                let state = self.state.lock();
+                let Ok(current) = self.checked_run_record(&state, caller, &status.run) else {
+                    continue;
+                };
+                if current.status != status
+                    || !current.catalogue_eligible()
+                    || !current
+                        .source
+                        .as_ref()
+                        .is_some_and(|held| Arc::ptr_eq(held, &source))
+                    || !current
+                        .catalogue_identity
+                        .as_ref()
+                        .is_some_and(|v| Arc::ptr_eq(v, &identity))
+                {
+                    continue;
+                }
+            }
+            if identity.catalogue_primary() != Some(id) {
+                continue;
+            }
+            verified.push(VerifiedCatalogueRun {
+                native: CatalogueNativeId::Codex(id),
+                project: selection
+                    .project
+                    .as_ref()
+                    .map(|project| project.key().to_owned()),
+                status,
+            });
+        }
+        self.check_caller(caller)?;
+        Ok(verified)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn record_opencode_catalogue_adoption(
+        &self,
+        run: &RunKey,
+        resource: &Arc<R>,
+        identity: Arc<super::launch_service::OpencodeCatalogueIdentity>,
+    ) {
+        let mut state = self.state.lock();
+        let Some(key) = state.runs.get(&run.run_id).cloned() else {
+            return;
+        };
+        let Some(record) = state.records.get_mut(&key) else {
+            return;
+        };
+        if record.status.run == *run
+            && record.catalogue_opencode.is_none()
+            && record
+                .resource
+                .as_ref()
+                .is_some_and(|held| Arc::ptr_eq(held, resource))
+        {
+            record.catalogue_opencode = Some(identity);
+        }
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn opencode_catalogue_runs(
+        &self,
+        caller: &CallerIdentity,
+        profile_id: &str,
+        revision: WireU64,
+        root: &str,
+    ) -> Result<Vec<VerifiedCatalogueRun>, SafeError> {
+        let candidates = {
+            let state = self.state.lock();
+            self.authorize(&state, caller)?;
+            state
+                .records
+                .values()
+                .filter_map(|record| {
+                    if record.owner != *caller || !record.catalogue_eligible() {
+                        return None;
+                    }
+                    let source = record.source.as_ref()?;
+                    if source.cli != super::types::CliKind::Opencode
+                        || source.profile_id != profile_id
+                        || source.profile_revision != revision
+                    {
+                        return None;
+                    }
+                    Some((
+                        record.status.clone(),
+                        source.clone(),
+                        record.catalogue_opencode.as_ref()?.clone(),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut verified = Vec::new();
+        for (status, source, identity) in candidates {
+            let Some((source_key, project_key)) = identity.current_keys() else {
+                continue;
+            };
+            if root != source_key || !source.selection().is_ok_and(|s| s.root.key() == root) {
+                continue;
+            }
+            let state = self.state.lock();
+            let Ok(current) = self.checked_run_record(&state, caller, &status.run) else {
+                continue;
+            };
+            if current.status != status
+                || !current.catalogue_eligible()
+                || !current
+                    .source
+                    .as_ref()
+                    .is_some_and(|held| Arc::ptr_eq(held, &source))
+                || !current
+                    .catalogue_opencode
+                    .as_ref()
+                    .is_some_and(|v| Arc::ptr_eq(v, &identity))
+            {
+                continue;
+            }
+            verified.push(VerifiedCatalogueRun {
+                native: CatalogueNativeId::Opencode(identity.native_session_id.clone()),
+                project: Some(project_key.to_owned()),
+                status,
+            });
+        }
+        self.check_caller(caller)?;
+        Ok(verified)
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn record_claude_catalogue_adoption(
+        &self,
+        run: &RunKey,
+        resource: &Arc<R>,
+        identity: Arc<super::launch_service::ClaudeCatalogueIdentity>,
+    ) {
+        let mut state = self.state.lock();
+        let Some(key) = state.runs.get(&run.run_id).cloned() else {
+            return;
+        };
+        let Some(record) = state.records.get_mut(&key) else {
+            return;
+        };
+        if record.status.run == *run
+            && record.catalogue_claude.is_none()
+            && record
+                .resource
+                .as_ref()
+                .is_some_and(|held| Arc::ptr_eq(held, resource))
+        {
+            record.catalogue_claude = Some(identity);
+        }
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    fn claude_catalogue_runs(
+        &self,
+        caller: &CallerIdentity,
+        profile_id: &str,
+        revision: WireU64,
+        root: &str,
+    ) -> Result<Vec<VerifiedCatalogueRun>, SafeError> {
+        let candidates = {
+            let state = self.state.lock();
+            self.authorize(&state, caller)?;
+            state
+                .records
+                .values()
+                .filter_map(|record| {
+                    if record.owner != *caller || !record.catalogue_eligible() {
+                        return None;
+                    }
+                    let source = record.source.as_ref()?;
+                    if source.cli != super::types::CliKind::Claude
+                        || source.profile_id != profile_id
+                        || source.profile_revision != revision
+                    {
+                        return None;
+                    }
+                    Some((
+                        record.status.clone(),
+                        source.clone(),
+                        record.catalogue_claude.as_ref()?.clone(),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut verified = Vec::new();
+        for (status, source, identity) in candidates {
+            let Some((id, project_key)) = identity.current() else {
+                continue;
+            };
+            if !source.selection().is_ok_and(|s| s.root.key() == root) {
+                continue;
+            }
+            let state = self.state.lock();
+            let Ok(current) = self.checked_run_record(&state, caller, &status.run) else {
+                continue;
+            };
+            if !identity.is_current()
+                || current.status != status
+                || !current.catalogue_eligible()
+                || !current
+                    .source
+                    .as_ref()
+                    .is_some_and(|held| Arc::ptr_eq(held, &source))
+                || !current
+                    .catalogue_claude
+                    .as_ref()
+                    .is_some_and(|v| Arc::ptr_eq(v, &identity))
+            {
+                continue;
+            }
+            verified.push(VerifiedCatalogueRun {
+                native: CatalogueNativeId::Claude(id),
+                project: Some(project_key.to_owned()),
+                status,
+            });
+        }
+        self.check_caller(caller)?;
+        Ok(verified)
+    }
+
+    // Read-only callers still receive only display facts, never a native run receipt.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn codex_catalogue_lifecycle(
+        &self,
+        caller: &CallerIdentity,
+        profile: &str,
+        revision: WireU64,
+        root: &str,
+    ) -> Result<Vec<(uuid::Uuid, LaunchPhase)>, SafeError> {
+        Ok(self
+            .codex_catalogue_runs(caller, profile, revision, root)?
+            .into_iter()
+            .filter_map(|row| match row.native {
+                CatalogueNativeId::Codex(id) => Some((id, row.status.phase)),
+                _ => None,
+            })
+            .collect())
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn opencode_catalogue_lifecycle(
+        &self,
+        caller: &CallerIdentity,
+        profile: &str,
+        revision: WireU64,
+        root: &str,
+    ) -> Result<Vec<(String, String, LaunchPhase)>, SafeError> {
+        Ok(self
+            .opencode_catalogue_runs(caller, profile, revision, root)?
+            .into_iter()
+            .filter_map(|row| match row.native {
+                CatalogueNativeId::Opencode(id) => Some((id, row.project?, row.status.phase)),
+                _ => None,
+            })
+            .collect())
+    }
+
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn claude_catalogue_lifecycle(
+        &self,
+        caller: &CallerIdentity,
+        profile: &str,
+        revision: WireU64,
+        root: &str,
+    ) -> Result<Vec<(uuid::Uuid, String, LaunchPhase)>, SafeError> {
+        Ok(self
+            .claude_catalogue_runs(caller, profile, revision, root)?
+            .into_iter()
+            .filter_map(|row| match row.native {
+                CatalogueNativeId::Claude(id) => Some((id, row.project?, row.status.phase)),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Only accepts a provider identity and a physical project resolved by
+    /// the desktop from its fresh scoped history, never a phone argument.
+    #[cfg(all(windows, feature = "remote-observer"))]
+    pub(crate) fn resolve_original_management_run(
+        &self,
+        caller: &CallerIdentity,
+        profile: &str,
+        revision: WireU64,
+        root: &str,
+        project: &str,
+        native: &CatalogueNativeId,
+    ) -> Result<LaunchStatus, SafeError> {
+        let candidates = match native {
+            CatalogueNativeId::Codex(_) => {
+                self.codex_catalogue_runs(caller, profile, revision, root)
+            }
+            CatalogueNativeId::Opencode(_) => {
+                self.opencode_catalogue_runs(caller, profile, revision, root)
+            }
+            CatalogueNativeId::Claude(_) => {
+                self.claude_catalogue_runs(caller, profile, revision, root)
+            }
+        }?;
+        let selected = unique_management_run(candidates, native, project)
+            .ok_or_else(|| error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"))?;
+        let state = self.state.lock();
+        let record = self.checked_run_record(&state, caller, &selected.run)?;
+        if record.status != selected || !record.catalogue_eligible() {
+            return Err(error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"));
+        }
+        if matches!(native, CatalogueNativeId::Claude(_))
+            && !record
+                .catalogue_claude
+                .as_ref()
+                .is_some_and(|identity| identity.is_current())
+        {
+            return Err(error("REMOTE_MANAGEMENT_TARGET_UNAVAILABLE"));
+        }
+        Ok(selected)
     }
 
     /// Called by a backend waiter, never directly by a WebView.

@@ -30,10 +30,17 @@ function render() {
 }
 describe('Unified settings shell', () => {
   // 正常设置导航恰好七个真实分类，不再以旧startup名称作为一级入口。
-  it('Settings_SevenSections_001', async () => {
+  it('Settings_ContainsRemoteConnections_001', async () => {
     const wrapper = render()
-    expect(wrapper.findAll('[data-settings-section]').map(item => item.attributes('data-settings-section'))).toEqual(['general', 'appearance', 'terminal', 'launch-configurations', 'shortcuts', 'update', 'about'])
+    expect(wrapper.findAll('[data-settings-section]').map(item => item.attributes('data-settings-section'))).toEqual(['general', 'appearance', 'terminal', 'launch-configurations', 'shortcuts', 'remote', 'update', 'about'])
     expect(useSidebarStore().activeSettingsSection).toBe('general')
+    expect(wrapper.find('[data-remote-connections]').exists()).toBe(false)
+    await wrapper.get('[data-settings-section="remote"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-remote-connections]').isVisible()).toBe(true))
+    await wrapper.get('[data-settings-section="general"]').trigger('click')
+    expect(wrapper.get('[data-remote-connections]').isVisible()).toBe(false)
+    await wrapper.get('[data-settings-section="remote"]').trigger('click')
+    expect(wrapper.get('[data-remote-connections]').isVisible()).toBe(true)
     useSidebarStore().openSettings('startup'); await flushPromises()
     expect(useSidebarStore().activeSettingsSection).toBe('general')
   })

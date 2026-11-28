@@ -38,7 +38,7 @@ impl Document {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct DeviceSummary {
     pub(crate) request_id: [u8; 16],
     pub(crate) phone_relay_public_key_sec1: [u8; 65],

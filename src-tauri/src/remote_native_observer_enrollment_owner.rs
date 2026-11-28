@@ -4,7 +4,7 @@ use super::{
     control, decode, hex, invitation_codes,
     setup::TrustedHostProfile,
     store::{RelayPair, RevokeApproval, State as DeviceState, Store},
-    ObserverApproval, RelayCandidate, RelayInvite, VerifiedCandidate,
+    ApprovalMachine, ObserverApproval, RelayCandidate, RelayInvite, VerifiedCandidate,
 };
 use crate::{
     cli::{
@@ -28,6 +28,8 @@ use std::{
 use tauri::{AppHandle, Window};
 use tokio::sync::Mutex;
 
+#[path = "remote_native_observer_catalogue_owner.rs"]
+mod catalogue_owner;
 #[path = "remote_native_observer_enrollment_sharing_owner.rs"]
 mod shares_owner;
 

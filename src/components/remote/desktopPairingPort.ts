@@ -49,6 +49,8 @@ export interface VerifiedPairing {
   approve(request: PendingPairing, scopeChoiceId: string | null): Promise<PairingSnapshot>
   reject(request: PendingPairing): Promise<PairingSnapshot>
   share?(device: ApprovedDevice, targets: readonly ShareTarget[]): Promise<PairingSnapshot>
+  startManagement?(device: ApprovedDevice): Promise<PairingSnapshot>
+  shareCatalogue?(device: ApprovedDevice, scope: import('@/types/nativeProjection').ScopeTarget, mode?: 'archived'): Promise<PairingSnapshot>
   stopSharing?(): Promise<PairingSnapshot>
   revoke(device: ApprovedDevice): Promise<PairingSnapshot>
 }

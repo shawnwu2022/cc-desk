@@ -280,6 +280,7 @@ pub(super) fn read(
                 metadata_incomplete: t.metadata_incomplete.then_some(true),
                 truncated: truncated || t.metadata_incomplete,
                 archived,
+                opencode_archive: None,
                 cwd: t.cwd,
                 updated_at: t.updated,
                 created_at,

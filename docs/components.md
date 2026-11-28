@@ -26,7 +26,7 @@ logical viewport mode, session-column visibility/width and context-drawer state.
 - `TitleBar.vue` takes the unified context title, preserves Windows minimize /
   maximize / close and macOS traffic-light space, and has no Native product toggle.
 - `ProjectsView` and `ProjectManagementDialogs` provide real registration, visibility and project metadata management through `projectManagement` and its admission barriers.
-- `SettingsView` loads in the main column on first activation and stays mounted. Its seven sections are General, Appearance, Terminal, Launch configurations, Shortcuts, Updates and About; complex edits use the shared dialogs.
+- `SettingsView` loads in the main column on first activation and stays mounted. Its eight sections are General, Appearance, Terminal, Launch configurations, Shortcuts, Remote Connections, Updates and About; complex edits use the shared dialogs.
 
 At widths below 1180 logical CSS pixels, context uses shared modal `AppDrawer`
 instead of reducing the main column. Below 900, the session column starts collapsed;
@@ -269,7 +269,7 @@ in those resource views.
 
 ## Settings
 
-`SettingsView.vue` covers the seven CC Desk settings sections within the unified
+`SettingsView.vue` covers the eight CC Desk settings sections within the unified
 shell. `TerminalThemePreview` is static non-PTY markup; both terminal runtimes
 consume the shared preferences. The old StartupSection environment-value editor
 is removed; launch configuration edits use the current guarded editor contract.

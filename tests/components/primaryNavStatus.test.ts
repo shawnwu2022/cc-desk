@@ -77,7 +77,8 @@ describe('Workspace global status badge', () => {
     expect(description(wrapper).textContent).toBe('等待权限的会话：1')
     useUnifiedSessionsStore().sessions = [row('error', { attentionKind: 'error' })]; await nextTick()
     expect(description(wrapper).textContent).toBe('出错的会话：1')
-    expect(wrapper.findAll('[data-primary-section]')).toHaveLength(4)
+    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('data-primary-section')))
+      .toEqual(['workspace', 'projects', 'settings'])
   })
   it('Badge_UsesSemanticErrorAndPermissionColors_004', () => {
     const source = readFileSync('src/components/shell/PrimaryNav.vue', 'utf8')

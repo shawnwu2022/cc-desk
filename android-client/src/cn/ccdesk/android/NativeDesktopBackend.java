@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class NativeDesktopBackend implements DesktopBackend {
     private final Activity activity;
     private final Runnable onChanged;
+    private final java.util.function.Consumer<Desktop> onProjectionChanged;
     private final DesktopStore store;
     private final PairingRecoveryJournal recovery;
     private final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1);
@@ -24,20 +25,23 @@ final class NativeDesktopBackend implements DesktopBackend {
     private final Map<UUID, Connection> paired = new ConcurrentHashMap<>();
     private Attempt pending;
 
-    private NativeDesktopBackend(Activity activity, DesktopStore store, Runnable onChanged) {
+    private NativeDesktopBackend(Activity activity, DesktopStore store, Runnable onChanged,
+            java.util.function.Consumer<Desktop> onProjectionChanged) {
         this.activity = activity;
         this.store = store;
         this.recovery = new PairingRecoveryJournal(activity);
         this.onChanged = onChanged;
+        this.onProjectionChanged = onProjectionChanged;
         executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
     }
 
-    static NativeDesktopBackend load(Activity activity, DesktopStore store, Runnable onChanged) {
+    static NativeDesktopBackend load(Activity activity, DesktopStore store, Runnable onChanged,
+            java.util.function.Consumer<Desktop> onProjectionChanged) {
         try {
             System.loadLibrary("cc_desk_android_native");
             // Calls a real symbol when loading so unsuitable/mismatched libraries cannot activate.
             if (nativeAndroidAbiVersion() != 3 || nativePairingState(0) != 0) return null;
-            return new NativeDesktopBackend(activity, store, onChanged);
+            return new NativeDesktopBackend(activity, store, onChanged, onProjectionChanged);
         } catch (SecurityException | LinkageError ignored) {
             return null;
         }
@@ -175,11 +179,49 @@ final class NativeDesktopBackend implements DesktopBackend {
             ? c.offers : Collections.emptyList();
     }
 
-    void loadShares(Desktop desktop, IdentityProvider keys) {
+    static final class CatalogueRow {
+        final String title;
+        final String lifecycle;
+        CatalogueRow(String title, String lifecycle) {
+            this.title = title;
+            this.lifecycle = lifecycle;
+        }
+    }
+
+    List<CatalogueRow> catalogueRows(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && verified(desktop) && c.state == State.CATALOGUE_READY
+            ? c.catalogue : Collections.emptyList();
+    }
+
+    boolean archiveCatalogue(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && verified(desktop) && c.state == State.CATALOGUE_READY && c.archiveCatalogue;
+    }
+
+    void loadShares(Desktop desktop, IdentityProvider keys) { loadShares(desktop, keys, false); }
+
+    void loadManagement(Desktop desktop, IdentityProvider keys) { loadShares(desktop, keys, false, true); }
+
+    void loadArchivedManagement(Desktop desktop, IdentityProvider keys) { loadShares(desktop, keys, true, true); }
+
+    boolean managementArchived(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && verified(desktop) && c.management && c.archiveCatalogue;
+    }
+
+    void loadShares(Desktop desktop, IdentityProvider keys, boolean archived) {
+        loadShares(desktop, keys, archived, false);
+    }
+
+    private void loadShares(Desktop desktop, IdentityProvider keys, boolean archived, boolean management) {
         Connection c = paired.get(desktop.localId);
         if (closed.get() || c == null || !verified(desktop)) return;
         executor.execute(() -> {
             if (closed.get() || c.share != 0 || c.observer != 0) return;
+            c.archiveCatalogue = archived;
+            c.management = management;
+            c.managementOutcome = 0;
             c.state = State.LOADING_SHARES;
             changed();
             try {
@@ -187,8 +229,12 @@ final class NativeDesktopBackend implements DesktopBackend {
                 HardwareIdentity relay = keys.open(desktop.localId, HardwareIdentity.Usage.RELAY);
                 HardwareIdentity approval = keys.open(desktop.localId, HardwareIdentity.Usage.APPROVAL);
                 c.shareFacade = new NativeKeystoreBridge(activity, desktop.localId, endpoint, relay, approval);
-                c.share = nativeLoadShares(c.shareFacade, localId(desktop.localId), desktop.relay.toString(),
-                    endpoint.spki(), relay.spki(), approval.spki());
+                byte[] local = localId(desktop.localId);
+                String origin = desktop.relay.toString();
+                c.share = management
+                    ? nativeLoadManagementList(c.shareFacade, local, origin, endpoint.spki(), relay.spki(), approval.spki(), archived)
+                    : archived ? nativeLoadArchivedShares(c.shareFacade, local, origin, endpoint.spki(), relay.spki(), approval.spki())
+                    : nativeLoadShares(c.shareFacade, local, origin, endpoint.spki(), relay.spki(), approval.spki());
                 if (c.share == 0 || closed.get()) { stopObserver(c, State.UNAVAILABLE); return; }
                 long owner = c.share;
                 schedule(() -> pollShares(c, owner));
@@ -215,6 +261,108 @@ final class NativeDesktopBackend implements DesktopBackend {
         });
     }
 
+    static final class ManagementItem {
+        final String title;
+        final boolean archived;
+        final String lifecycle;
+        private final byte[] reference;
+        ManagementItem(String title, boolean archived, String lifecycle, byte[] reference) {
+            this.title = title; this.archived = archived; this.lifecycle = lifecycle; this.reference = reference;
+        }
+    }
+
+    List<ManagementItem> managementRows(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && verified(desktop) && c.state == State.MANAGEMENT_READY
+            ? c.managementRows : Collections.emptyList();
+    }
+
+    int managementOutcome(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && verified(desktop) ? c.managementOutcome : 0;
+    }
+
+    void renameManagement(Desktop desktop, ManagementItem item, String title) {
+        if (item.archived) return;
+        submitManagedMetadata(desktop, item, "rename", title);
+    }
+
+    void changeManagementArchive(Desktop desktop, ManagementItem item) {
+        if ("open".equals(item.lifecycle)) return;
+        submitManagedMetadata(desktop, item, item.archived ? "restore" : "archive", null);
+    }
+
+    void closeManagementRun(Desktop desktop, ManagementItem item) {
+        if (item.archived || !"open".equals(item.lifecycle)) return;
+        submitManagedMetadata(desktop, item, "close", null);
+    }
+
+    void reconnectManagementRun(Desktop desktop, ManagementItem item) {
+        if (item.archived || !"open".equals(item.lifecycle)) return;
+        submitManagedMetadata(desktop, item, "reconnect", null);
+    }
+
+    String managementProjection(Desktop desktop) {
+        Connection c = paired.get(desktop.localId);
+        return c != null && verified(desktop) && c.state == State.MANAGEMENT_VIEWING
+            ? c.managementProjection : null;
+    }
+
+    void stopManagementViews() {
+        if (closed.get()) return;
+        executor.execute(() -> {
+            for (Connection c : paired.values())
+                if (c.state == State.MANAGEMENT_VIEWING || c.requestedProjection)
+                    stopObserver(c, State.DISCONNECTED);
+        });
+    }
+
+    private void submitManagedMetadata(Desktop desktop, ManagementItem item, String kind, String title) {
+        Connection c = paired.get(desktop.localId);
+        if (closed.get() || c == null || !verified(desktop)) return;
+        executor.execute(() -> {
+            if (closed.get() || c.state != State.MANAGEMENT_READY || c.share == 0 ||
+                !c.managementRows.contains(item)) return;
+            try {
+                org.json.JSONObject body = new org.json.JSONObject().put("action", kind);
+                if (title != null) body.put("title", title);
+                byte[] action = body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                if (!nativeSubmitManagement(c.share, item.reference, action)) return;
+                c.requestedProjection = "reconnect".equals(kind);
+                c.managementOutcome = c.requestedProjection ? 0 : 3;
+                c.managementRows = Collections.emptyList();
+                c.state = State.MANAGEMENT_WAITING;
+                changed();
+            } catch (Exception | LinkageError denied) { stopObserver(c, State.UNAVAILABLE); }
+        });
+    }
+
+    private static List<ManagementItem> parseManagementRows(String input) throws org.json.JSONException {
+        if (input == null || input.length() > 524288) throw new org.json.JSONException("Invalid management rows");
+        org.json.JSONArray items = new org.json.JSONArray(input);
+        if (items.length() > 512) throw new org.json.JSONException("Too many management rows");
+        List<ManagementItem> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < items.length(); ++i) {
+            org.json.JSONObject item = items.getJSONObject(i);
+            String title = item.getString("title");
+            String lifecycle = item.getString("lifecycle");
+            boolean archived = item.getBoolean("archived");
+            org.json.JSONArray bytes = item.getJSONArray("reference");
+            if (item.length() != 4 || !SessionDisplayTitle.valid(title)
+                || !("open".equals(lifecycle) || "closed".equals(lifecycle)) ||
+                archived && "open".equals(lifecycle) || bytes.length() != 32)
+                throw new org.json.JSONException("Invalid management row");
+            byte[] reference = new byte[32];
+            for (int j = 0; j < 32; ++j) {
+                int value = bytes.getInt(j);
+                if (value < 0 || value > 255) throw new org.json.JSONException("Invalid reference");
+                reference[j] = (byte) value;
+            }
+            rows.add(new ManagementItem(title, archived, lifecycle, reference));
+        }
+        return Collections.unmodifiableList(rows);
+    }
+
     private void pollShares(Connection c, long owner) {
         if (closed.get() || owner == 0 || c.share != owner || c.observer != 0) return;
         try {
@@ -228,13 +376,57 @@ final class NativeDesktopBackend implements DesktopBackend {
                         changed();
                     }
                     break;
+                case 8:
+                    if (!c.management) { stopObserver(c, State.UNAVAILABLE); return; }
+                    if (c.state != State.MANAGEMENT_READY) {
+                        List<ManagementItem> rows = parseManagementRows(nativeManagementRows(owner));
+                        if (rows.stream().anyMatch(row -> row.archived != c.archiveCatalogue)) {
+                            stopObserver(c, State.UNAVAILABLE); return;
+                        }
+                        c.managementRows = rows;
+                        c.state = State.MANAGEMENT_READY;
+                        changed();
+                    }
+                    break;
+                case 9:
+                    if (!c.management || !c.requestedProjection) {
+                        stopObserver(c, State.UNAVAILABLE); return;
+                    }
+                    String view = nativeManagementProjection(owner);
+                    if (view != null && !view.equals(c.managementProjection)) {
+                        boolean first = c.state != State.MANAGEMENT_VIEWING;
+                        c.managementProjection = view;
+                        c.state = State.MANAGEMENT_VIEWING;
+                        if (first) changed();
+                        else activity.runOnUiThread(() -> {
+                            if (!closed.get() && !activity.isDestroyed())
+                                onProjectionChanged.accept(c.desktop);
+                        });
+                    }
+                    break;
+                case 7:
+                    if (!c.management) { stopObserver(c, State.UNAVAILABLE); return; }
+                    int outcome = nativeManagementOutcome(owner);
+                    c.managementOutcome = c.requestedProjection ? 0 : (outcome >= 1 && outcome <= 3 ? outcome : 3);
+                    stopObserver(c, State.DISCONNECTED);
+                    return;
                 case 4:
+                    if (c.management) break;
                     if (c.state != State.AWAITING_OBSERVER) {
                         c.state = State.AWAITING_OBSERVER;
                         c.offers = Collections.emptyList();
                         changed();
                     }
                     break;
+                case 6:
+                    c.catalogue = parseCatalogue(nativeCatalogueRows(owner));
+                    c.share = 0;
+                    nativeCancelShares(owner);
+                    if (c.shareFacade != null) c.shareFacade.close();
+                    c.shareFacade = null;
+                    c.state = State.CATALOGUE_READY;
+                    changed();
+                    return;
                 case 5:
                     c.observer = nativeShareObserverHandle(owner);
                     if (c.observer == 0) { stopObserver(c, State.UNAVAILABLE); return; }
@@ -248,6 +440,25 @@ final class NativeDesktopBackend implements DesktopBackend {
             }
             schedule(() -> pollShares(c, owner));
         } catch (Exception | LinkageError e) { stopObserver(c, State.UNAVAILABLE); }
+    }
+
+    static List<CatalogueRow> parseCatalogue(String input) throws org.json.JSONException {
+        if (input == null || input.length() > 1048576)
+            throw new org.json.JSONException("Invalid catalogue");
+        org.json.JSONArray items = new org.json.JSONArray(input);
+        if (items.length() > 8192) throw new org.json.JSONException("Too many catalogue rows");
+        List<CatalogueRow> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < items.length(); i++) {
+            org.json.JSONObject item = items.getJSONObject(i);
+            Object title = item.get("title");
+            Object state = item.get("lifecycle");
+            if (item.length() != 2 || !(title instanceof String) ||
+                !("open".equals(state) || "closed".equals(state) || "history".equals(state)) ||
+                !SessionDisplayTitle.valid((String) title))
+                throw new org.json.JSONException("Invalid catalogue row");
+            rows.add(new CatalogueRow((String)title, (String)state));
+        }
+        return Collections.unmodifiableList(rows);
     }
 
     private static List<Offer> parseOffers(long owner, String input) throws org.json.JSONException {
@@ -444,6 +655,11 @@ final class NativeDesktopBackend implements DesktopBackend {
         c.panelReady = false;
         c.lastConfirmedFrame = 0;
         c.offers = Collections.emptyList();
+        c.catalogue = Collections.emptyList();
+        c.managementRows = Collections.emptyList();
+        c.managementProjection = null;
+        c.requestedProjection = false;
+        c.management = false;
         c.state = terminal;
         try {
             if (observer != 0) nativeCancelObserver(observer);
@@ -533,6 +749,13 @@ final class NativeDesktopBackend implements DesktopBackend {
         long share;
         NativeKeystoreBridge shareFacade;
         volatile List<Offer> offers = Collections.emptyList();
+        volatile List<CatalogueRow> catalogue = Collections.emptyList();
+        volatile List<ManagementItem> managementRows = Collections.emptyList();
+        volatile boolean management;
+        volatile int managementOutcome;
+        volatile boolean requestedProjection;
+        volatile String managementProjection;
+        volatile boolean archiveCatalogue;
         volatile long observer;
         volatile long stopRequestedHandle;
         Offer selectedOffer;
@@ -557,8 +780,17 @@ final class NativeDesktopBackend implements DesktopBackend {
         String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki);
     static native long nativeLoadShares(NativeKeystoreBridge facade, byte[] localId,
         String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki);
+    static native long nativeLoadArchivedShares(NativeKeystoreBridge facade, byte[] localId,
+        String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki);
+    static native long nativeLoadManagementList(NativeKeystoreBridge facade, byte[] localId,
+        String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki, boolean archived);
+    static native String nativeManagementRows(long handle);
+    static native boolean nativeSubmitManagement(long handle, byte[] opaqueReference, byte[] typedAction);
+    static native int nativeManagementOutcome(long handle);
+    static native String nativeManagementProjection(long handle);
     static native int nativeShareState(long handle);
     static native String nativeShareOffers(long handle);
+    static native String nativeCatalogueRows(long handle);
     static native boolean nativeChooseShare(long handle, String offer);
     static native long nativeShareObserverHandle(long handle);
     static native void nativeCancelShares(long handle);

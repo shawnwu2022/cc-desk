@@ -9,7 +9,16 @@ use std::ffi::OsString;
 
 pub(super) fn action_args(snapshot: &LaunchSnapshot) -> Result<Vec<OsString>, SafeError> {
     let action_args = match &snapshot.request().action {
-        LaunchAction::New => Vec::new(),
+        LaunchAction::New => {
+            #[cfg(all(windows, feature = "remote-observer"))]
+            let args = snapshot
+                .claude_catalogue_id()
+                .map(|id| vec!["--session-id".into(), id.to_string().into()])
+                .unwrap_or_default();
+            #[cfg(not(all(windows, feature = "remote-observer")))]
+            let args = Vec::new();
+            args
+        }
         LaunchAction::ResumePicker {
             scope: ResumeScope::CurrentProject,
         } => vec!["--resume".into()],

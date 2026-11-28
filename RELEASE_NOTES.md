@@ -4,6 +4,20 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.7]
+
+Added
+
+- The Windows Remote Connections settings can grant one paired Android phone up to five minutes of CC Desk session management. No project or CLI picker is required.
+- Manage eligible Desk-owned Codex, Claude Code and OpenCode sessions across visible local projects. The ordinary list includes open and closed sessions; the separate Archives view lets you restore an archived session.
+- Rename, archive, restore or close eligible sessions. Reconnect to the active original session to see its live output without restarting it.
+
+Limits
+
+- Test-channel only. Update both the Windows desktop and Android app. The production relay and Stable channel are unchanged.
+- Management reconnect is read-only; terminal input still requires separate authorization. No permanent deletion or automatic replay of uncertain writes.
+- Tested with isolated native sessions and relay traffic. Physical handset use and the production relay were not validated.
+
 ## [0.28.0-rc.6]
 
 Fixed

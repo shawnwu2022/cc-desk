@@ -47,3 +47,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Session title filter JVM test failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Session search coverage JVM test compile failed' }
 & "$Jdk/bin/java.exe" -cp "$out/unit" cn.ccdesk.android.SessionSearchCoverageTest
 if ($LASTEXITCODE -ne 0) { throw 'Session search coverage JVM test failed' }
+
+& "$Jdk/bin/javac.exe" -encoding UTF-8 -d "$out/unit" "$root/src/cn/ccdesk/android/SessionDisplayTitle.java" "$root/tests/cn/ccdesk/android/SessionDisplayTitleTest.java"
+if ($LASTEXITCODE -ne 0) { throw 'Session display title JVM test compile failed' }
+& "$Jdk/bin/java.exe" -cp "$out/unit" cn.ccdesk.android.SessionDisplayTitleTest
+if ($LASTEXITCODE -ne 0) { throw 'Session display title JVM test failed' }
